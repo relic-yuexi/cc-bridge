@@ -326,6 +326,42 @@
     }
     .tool-result-header::before { content: "✓"; font-size: 14px; }
 
+    .upload-block {
+      margin: 8px 0;
+      border-radius: 14px;
+      border: 1px solid rgba(15,118,110,0.15);
+      background: linear-gradient(135deg, rgba(15,118,110,0.04), rgba(255,255,255,0.9));
+      overflow: hidden;
+    }
+    .upload-block-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px;
+      font-size: 12px; font-weight: 700; color: var(--teal-deep);
+      letter-spacing: .04em; text-transform: uppercase;
+    }
+    .upload-block-header a {
+      font-size: 11px; font-weight: 600; color: var(--teal);
+      text-decoration: none; opacity: .8;
+    }
+    .upload-block-header a:hover { opacity: 1; text-decoration: underline; }
+    .upload-preview-img {
+      display: block; max-width: 100%; max-height: 480px;
+      border-top: 1px solid rgba(15,118,110,0.1);
+      object-fit: contain; background: #f8f8f8;
+    }
+    .upload-preview-code {
+      border-top: 1px solid rgba(15,118,110,0.1);
+      padding: 12px 14px;
+      font-size: 12px; font-family: "Cascadia Code","Fira Code",monospace;
+      white-space: pre-wrap; word-break: break-all;
+      max-height: 400px; overflow-y: auto;
+      background: rgba(27,36,48,0.04);
+    }
+    .upload-preview-iframe {
+      display: block; width: 100%; height: 420px;
+      border-top: 1px solid rgba(15,118,110,0.1); border: none;
+    }
+
     .permission-block {
       margin: 10px 0;
       padding: 16px;
@@ -1188,7 +1224,64 @@
               break;
             }
             case 'user': {
-              // Replayed user message, skip (we already show our own)
+              // Replayed user message — skip plain text (we already show it),
+              // but render tool_result blocks so users can see execution output.
+              const content = evt.message?.content;
+              if (!Array.isArray(content)) break;
+              for (const item of content) {
+                if (item.type !== 'tool_result') continue;
+                const raw = Array.isArray(item.content)
+                  ? item.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
+                  : (typeof item.content === 'string' ? item.content : '');
+                if (!raw.trim()) continue;
+                const safe = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                const truncated = safe.length > 2000 ? safe.slice(0, 2000) + '\n…（已截断）' : safe;
+                addMessage('system',
+                  `<div class="tool-result-block"><div class="tool-result-header">工具结果</div><pre class="tool-use-input">${truncated}</pre></div>`,
+                  { html: true }
+                );
+              }
+              break;
+            }
+            case 'upload_success': {
+              const fname = evt.filename || 'file';
+              const href = evt.url || '#';
+              const ext = fname.slice(fname.lastIndexOf('.')).toLowerCase();
+              const safeName = fname.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+              const safeHref = href.replace(/"/g,'&quot;');
+              const IMG_EXTS = ['.png','.jpg','.jpeg','.gif','.webp','.svg'];
+              const CODE_EXTS = ['.js','.ts','.jsx','.tsx','.py','.sh','.bash','.json','.yaml','.yml','.toml','.xml','.css','.md','.txt','.log','.csv','.sql','.rs','.go','.java','.c','.cpp','.h'];
+              const HTML_EXTS = ['.html','.htm'];
+              let preview = '';
+              if (IMG_EXTS.includes(ext)) {
+                preview = `<img class="upload-preview-img" src="${safeHref}" alt="${safeName}" loading="lazy">`;
+              } else if (HTML_EXTS.includes(ext)) {
+                preview = `<iframe class="upload-preview-iframe" src="${safeHref}" sandbox="allow-scripts allow-same-origin"></iframe>`;
+              } else if (CODE_EXTS.includes(ext)) {
+                // fetch and show content
+                preview = `<pre class="upload-preview-code" id="code-preview-${Date.now()}">加载中…</pre>`;
+              }
+              const block = `<div class="upload-block">
+                <div class="upload-block-header">
+                  <span>📎 ${safeName}</span>
+                  <a href="${safeHref}" target="_blank" download>下载</a>
+                </div>
+                ${preview}
+              </div>`;
+              const el = addMessage('system', block, { html: true });
+              // For code files: fetch content after DOM insertion
+              if (CODE_EXTS.includes(ext) && el) {
+                const pre = el.querySelector('pre[id^="code-preview-"]');
+                if (pre) {
+                  fetch(href).then(r => r.text()).then(text => {
+                    pre.textContent = text.length > 8000 ? text.slice(0, 8000) + '\n…（已截断）' : text;
+                  }).catch(() => { pre.textContent = '（加载失败）'; });
+                }
+              }
+              break;
+            }
+            case 'upload_error': {
+              addMessage('error', `文件上传失败：${evt.error || '未知错误'}`);
               break;
             }
             default: {

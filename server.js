@@ -580,6 +580,10 @@ function getSessionUploadDir(sessionId) {
   return join(getServerSessionDir(sessionId), 'uploads');
 }
 
+function getBridgeUploadDir(sessionId) {
+  return join(getServerSessionDir(sessionId), 'bridge-uploads');
+}
+
 function appendMessageRecord(sessionId, event) {
   if (!['assistant', 'user', 'result'].includes(event.type)) return;
   try {
@@ -765,7 +769,7 @@ const server = createServer((req, res) => {
     return;
   }
 
-  // POST /api/sessions/:id/upload - Upload a file for a session
+  // POST /api/sessions/:id/upload - Upload a file for a session (from Bridge)
   const uploadMatch = req.url?.match(/^\/api\/sessions\/([^/?#]+)\/upload/);
   if (req.method === 'POST' && uploadMatch) {
     const sessionId = decodeURIComponent(uploadMatch[1]);
@@ -773,22 +777,28 @@ const server = createServer((req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const { name, mimeType, data } = JSON.parse(body);
-        if (!name || !data) {
+        const payload = JSON.parse(body);
+        // 支持两种参数格式：{ name, data } 或 { filename, content }
+        const fileName = payload.filename || payload.name;
+        const fileData = payload.content || payload.data;
+
+        if (!fileName || !fileData) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Missing name or data' }));
+          res.end(JSON.stringify({ error: 'Missing filename/name or content/data' }));
           return;
         }
-        const ext = extname(name);
-        const safeName = safePathSegment(basename(name, ext)) + ext;
-        const uploadDir = getSessionUploadDir(sessionId);
+        const ext = extname(fileName);
+        const safeName = safePathSegment(basename(fileName, ext)) + ext;
+        const uploadDir = getBridgeUploadDir(sessionId);  // 使用 bridge-uploads 目录
         ensureDir(uploadDir);
         const filePath = join(uploadDir, safeName);
-        writeFileSync(filePath, Buffer.from(data, 'base64'));
-        const url = `/session-uploads/${encodeURIComponent(safePathSegment(sessionId))}/${encodeURIComponent(safeName)}`;
-        console.log(`[Upload] session=${sessionId} file=${safeName}`);
+        writeFileSync(filePath, Buffer.from(fileData, 'base64'));
+        const url = `/bridge-uploads/${encodeURIComponent(safePathSegment(sessionId))}/${encodeURIComponent(safeName)}`;
+        console.log(`[Bridge Upload] session=${sessionId} file=${safeName}`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ name: safeName, path: filePath, url }));
+        // Notify frontend so the file link appears in chat
+        forwardToChat(sessionId, { type: 'upload_success', filename: safeName, url });
       } catch (e) {
         console.error('[Upload] Error:', e.message);
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -798,7 +808,7 @@ const server = createServer((req, res) => {
     return;
   }
 
-  // GET /session-uploads/:sessionId/:filename - Serve uploaded files
+  // GET /session-uploads/:sessionId/:filename - Serve uploaded files (from browser)
   const serveUploadMatch = req.url?.match(/^\/session-uploads\/([^/?#]+)\/([^/?#]+)/);
   if (req.method === 'GET' && serveUploadMatch) {
     const sessionId = decodeURIComponent(serveUploadMatch[1]);
@@ -821,6 +831,41 @@ const server = createServer((req, res) => {
         '.js': 'text/javascript', '.ts': 'text/typescript',
         '.py': 'text/x-python', '.json': 'application/json',
         '.yaml': 'text/yaml', '.yml': 'text/yaml', '.csv': 'text/csv',
+      };
+      const contentType = mimeMap[ext] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': stat.size });
+      createReadStream(filePath).pipe(res);
+    } catch (e) {
+      res.writeHead(500);
+      res.end('Error');
+    }
+    return;
+  }
+
+  // GET /bridge-uploads/:sessionId/:filename - Serve bridge uploaded files (from Claude Code)
+  const serveBridgeUploadMatch = req.url?.match(/^\/bridge-uploads\/([^/?#]+)\/([^/?#]+)/);
+  if (req.method === 'GET' && serveBridgeUploadMatch) {
+    const sessionId = decodeURIComponent(serveBridgeUploadMatch[1]);
+    const filename = decodeURIComponent(serveBridgeUploadMatch[2]);
+    const safeSid = safePathSegment(sessionId);
+    const safeFn = safePathSegment(filename);
+    const filePath = join(getBridgeUploadDir(safeSid), safeFn);
+    if (!existsSync(filePath)) {
+      res.writeHead(404);
+      res.end('Not Found');
+      return;
+    }
+    try {
+      const stat = statSync(filePath);
+      const ext = extname(safeFn).toLowerCase();
+      const mimeMap = {
+        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+        '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+        '.txt': 'text/plain', '.md': 'text/markdown',
+        '.js': 'text/javascript', '.ts': 'text/typescript',
+        '.py': 'text/x-python', '.json': 'application/json',
+        '.yaml': 'text/yaml', '.yml': 'text/yaml', '.csv': 'text/csv',
+        '.pdf': 'application/pdf', '.html': 'text/html',
       };
       const contentType = mimeMap[ext] || 'application/octet-stream';
       res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': stat.size });
@@ -856,6 +901,7 @@ const server = createServer((req, res) => {
           console.log(`[POST /session/${sessionId}/events] type=${event.type}`);
           if (event.type === 'control_request') {
             console.log(`[POST /session/${sessionId}/events] control_request FULL:`, JSON.stringify(event));
+            cacheControlRequest(sessionId, event);
           }
           forwardToChat(sessionId, event);
         }
@@ -1100,6 +1146,12 @@ function handleBridgeMessage(bridgeId, ws, msg) {
       forwardToChat(msg.sessionId, msg.payload);
       break;
 
+    case 'upload_success':
+    case 'upload_error':
+      // Forward upload result to chat clients
+      forwardToChat(msg.sessionId, msg);
+      break;
+
     case 'session_end':
       const sessionEnd = sessionManager.getSession(msg.sessionId);
       if (sessionEnd?.chatWsSet) {
@@ -1125,12 +1177,96 @@ function handleChatMessage(sessionId, msg) {
   const bridge = bridgeManager.getBridge(session.bridgeId);
   const useSessionIngress = Boolean(bridge?.metadata?.useSdkUrl);
 
-  // Permission responses go back through the bridge control channel so the
-  // child can consume them on stdin together with other local control replies.
+  // Handle file upload request - forward to bridge to upload file from bridge machine
+  if (msg.type === 'upload_file') {
+    if (bridge?.ws?.readyState === WebSocket.OPEN) {
+      bridge.ws.send(JSON.stringify({
+        type: 'upload_file',
+        sessionId,
+        filePath: msg.filePath,
+        filename: msg.filename,
+      }));
+      console.log(`[Upload] Forwarded upload request to bridge: ${msg.filePath}`);
+    } else {
+      console.error(`[Upload] Bridge not connected for session ${sessionId}`);
+    }
+    return;
+  }
+
+  // Handle image message - receive image and forward to Claude
+  if (msg.type === 'image_message' && msg.data) {
+    try {
+      // Save image to session uploads directory
+      const uploadDir = getSessionUploadDir(sessionId);
+      ensureDir(uploadDir);
+      const ext = msg.mimeType?.split('/')[1] || 'png';
+      const filename = `image-${Date.now()}.${ext}`;
+      const filePath = join(uploadDir, filename);
+      writeFileSync(filePath, Buffer.from(msg.data, 'base64'));
+
+      // Build image content for Claude
+      const imageUrl = `/session-uploads/${encodeURIComponent(safePathSegment(sessionId))}/${encodeURIComponent(filename)}`;
+      const imageContent = {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: msg.mimeType || 'image/png',
+          data: msg.data,
+        },
+        url: imageUrl,
+      };
+
+      // Forward as user message with image
+      if (useSessionIngress) {
+        const contentArray = [imageContent];
+        if (msg.caption) {
+          contentArray.push({ type: 'text', text: msg.caption });
+        }
+        const event = { type: 'user', session_id: sessionId, message: { role: 'user', content: contentArray } };
+        deliverClaudeIngressMessage(sessionId, event, 'Image message');
+      } else if (bridge?.ws?.readyState === WebSocket.OPEN) {
+        bridge.ws.send(JSON.stringify({
+          type: 'user_message',
+          sessionId,
+          contentArray: [imageContent],
+        }));
+      }
+
+      // Notify chat clients about the image
+      for (const chatWs of session.chatWsSet || []) {
+        if (chatWs.readyState === WebSocket.OPEN) {
+          chatWs.send(JSON.stringify({
+            type: 'image_received',
+            filename,
+            url: imageUrl,
+            caption: msg.caption,
+          }));
+        }
+      }
+
+      console.log(`[Image] session=${sessionId} saved as ${filename}`);
+      return;
+    } catch (e) {
+      console.error(`[Image] Error: ${e.message}`);
+    }
+  }
+
   if (msg.type === 'permission_response') {
     const decision = msg.decision; // 'allow' or 'deny'
     const requestId = msg.requestId;
     const permissions = msg.permissions || []; // checked permission_suggestions from UI
+
+    // In --sdk-url mode, Claude reads from WebSocket — send directly to Claude WS.
+    // In stdio mode, Claude reads from stdin — route through bridge control channel.
+    const claudeWs = claudeWsConnections.get(sessionId);
+    if (claudeWs?.readyState === WebSocket.OPEN) {
+      const controlRequest = pendingControlRequests.get(requestId);
+      const response = buildPermissionControlResponse(sessionId, decision, requestId, controlRequest?.event);
+      claudeWs.send(JSON.stringify(response) + '\n');
+      pendingControlRequests.delete(requestId);
+      console.log(`[Permission -> Claude WS] session=${sessionId} requestId=${requestId} decision=${decision}`);
+      return;
+    }
 
     if (bridge?.ws?.readyState === WebSocket.OPEN) {
       bridge.ws.send(JSON.stringify({

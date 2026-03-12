@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { inspect } from 'util';
+import { request as httpRequest } from 'http';
+import { request as httpsRequest } from 'https';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -311,6 +313,11 @@ class BridgeController {
         });
         break;
 
+      case 'upload_file':
+        // Upload a file from bridge's file system to server
+        this.uploadFileToServer(msg.sessionId, msg.filePath, msg.filename);
+        break;
+
       case 'permission_response':
         // Permission responses delivered over the bridge control channel are written to stdin.
         // This path is for stdin/stdout mode sessions.
@@ -431,11 +438,14 @@ class BridgeController {
       console.log(`⚠️  [${sessionId}] Running with --dangerously-skip-permissions`);
     }
 
+    const uploadBaseUrl = SIGNALING_URL.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
     const env = {
       ...process.env,
       ...BRIDGE_ENV,           // Bridge-level custom env vars
       ...sessionEnv,           // Session-level custom env vars (override bridge-level)
       CLAUDE_CODE_ENVIRONMENT_KIND: 'bridge',
+      BRIDGE_UPLOAD_URL: `${uploadBaseUrl}/api/sessions/${encodeURIComponent(sessionId)}/upload`,
+      BRIDGE_UPLOAD_SCRIPT: join(__dirname, 'upload-helper.js'),
       ...(USE_SDK_URL && {
         CLAUDE_CODE_SESSION_ACCESS_TOKEN: 'local-token',
         CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2: '1',
@@ -493,6 +503,7 @@ class BridgeController {
               claudeProc.claudeSessionId = event.session_id;
               this.persistSessionState(sessionId);
             }
+
             this.send({
               type: 'agent_event',
               sessionId,
@@ -504,7 +515,7 @@ class BridgeController {
         }
       });
     } else {
-      // --sdk-url mode: Claude sends events directly
+      // --sdk-url mode: Claude sends events directly to HTTP endpoint, no need to forward via WebSocket
       child.stdout.on('data', (chunk) => {
         const text = chunk.toString();
         this.appendSessionLog(sessionId, 'STDOUT', text);
@@ -512,6 +523,13 @@ class BridgeController {
         for (const line of lines) {
           try {
             const parsed = JSON.parse(line);
+
+            // Extract and cache session_id if present
+            if (parsed.session_id) {
+              claudeProc.claudeSessionId = parsed.session_id;
+              this.persistSessionState(sessionId);
+            }
+
             // Cache control_requests so we can include permission_suggestions in responses
             if (parsed.type === 'control_request' && parsed.request_id) {
               this.pendingControlRequests.set(parsed.request_id, parsed);
@@ -522,6 +540,7 @@ class BridgeController {
               console.log(`[${sessionId}] Cached control_request: requestId=${parsed.request_id} subtype=${parsed.request?.subtype}`);
               this.respondToLocalControlRequest(sessionId, parsed);
             }
+
             // Log interesting event types in detail
             if (parsed.type === 'control_request' || parsed.type === 'control_response') {
               console.log(`[${sessionId}] Claude stdout [${parsed.type}]:`, JSON.stringify(parsed).slice(0, 1000));
@@ -551,6 +570,7 @@ class BridgeController {
         exitSignal: signal,
       });
       this.appendSessionEvent(sessionId, 'process_closed', { code, signal });
+
 
       if (!USE_SDK_URL) {
         this.send({
@@ -790,6 +810,102 @@ class BridgeController {
     }
 
     process.exit(0);
+  }
+
+  uploadFileToServer(sessionId, filePath, filename) {
+    console.log(`[${sessionId}] Uploading file to server: ${filePath}`);
+
+    if (!existsSync(filePath)) {
+      console.error(`[${sessionId}] File not found: ${filePath}`);
+      this.send({
+        type: 'upload_error',
+        sessionId,
+        error: 'File not found',
+        filePath,
+      });
+      return;
+    }
+
+    try {
+      const fileContent = readFileSync(filePath);
+      const base64Content = fileContent.toString('base64');
+      const finalFilename = filename || filePath.split(/[/\\]/).pop();
+
+      // Parse SIGNALING_URL to get host and port
+      const url = new URL(SIGNALING_URL);
+      const isHttps = url.protocol === 'https:';
+      const requestFn = isHttps ? httpsRequest : httpRequest;
+
+      const payload = JSON.stringify({
+        filename: finalFilename,
+        content: base64Content,
+      });
+
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: `/api/sessions/${encodeURIComponent(sessionId)}/upload`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      };
+
+      const req = requestFn(options, (res) => {
+        let responseData = '';
+        res.on('data', (chunk) => { responseData += chunk; });
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            console.log(`[${sessionId}] ✅ File uploaded successfully: ${finalFilename}`);
+            try {
+              const result = JSON.parse(responseData);
+              this.send({
+                type: 'upload_success',
+                sessionId,
+                filename: finalFilename,
+                url: result.url,
+              });
+            } catch (e) {
+              console.error(`[${sessionId}] Failed to parse upload response:`, e.message);
+            }
+          } else {
+            console.error(`[${sessionId}] ❌ Upload failed with status ${res.statusCode}: ${responseData}`);
+            this.send({
+              type: 'upload_error',
+              sessionId,
+              error: `Upload failed: ${res.statusCode}`,
+              details: responseData,
+            });
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        console.error(`[${sessionId}] ❌ Upload request error:`, err.message);
+        this.send({
+          type: 'upload_error',
+          sessionId,
+          error: err.message,
+        });
+      });
+
+      req.write(payload);
+      req.end();
+
+      this.appendSessionEvent(sessionId, 'file_upload_initiated', {
+        filePath,
+        filename: finalFilename,
+        size: fileContent.length,
+      });
+    } catch (e) {
+      console.error(`[${sessionId}] ❌ Failed to read or upload file:`, e.message);
+      this.send({
+        type: 'upload_error',
+        sessionId,
+        error: e.message,
+      });
+    }
   }
 }
 
