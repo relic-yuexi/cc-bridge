@@ -1,10 +1,11 @@
 // server.js - Multi-Bridge Management Server
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream, statSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream, statSync, readdirSync } from 'fs';
+import { PluginAPI } from './plugin-api.js';
 import { extname, basename } from 'path';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { inspect } from 'util';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -379,6 +380,69 @@ class SessionManager {
 const bridgeManager = new BridgeManager();
 const sessionManager = new SessionManager();
 
+// ============ Plugin API ============
+// Initialized after sessionManager/bridgeManager; deliverClaudeIngressMessage and
+// buildUserMessageEvent are referenced by name so they resolve at call-time.
+const pluginAPI = new PluginAPI({
+  sessionManager,
+  bridgeManager,
+  deliverClaudeIngressMessage,
+  buildUserMessageEvent,
+  respondToPermission,
+  resolveUploadUrl(url) {
+    const bridgeMatch = url.match(/^\/bridge-uploads\/([^/?#]+)\/([^/?#]+)/);
+    if (bridgeMatch) {
+      const sid = safePathSegment(decodeURIComponent(bridgeMatch[1]));
+      const fn  = safePathSegment(decodeURIComponent(bridgeMatch[2]));
+      return join(getServerSessionDir(sid), 'bridge-uploads', fn);
+    }
+    const sessionMatch = url.match(/^\/session-uploads\/([^/?#]+)\/([^/?#]+)/);
+    if (sessionMatch) {
+      const sid = safePathSegment(decodeURIComponent(sessionMatch[1]));
+      const fn  = safePathSegment(decodeURIComponent(sessionMatch[2]));
+      return join(getServerSessionDir(sid), 'uploads', fn);
+    }
+    return null;
+  },
+});
+
+function respondToPermission(sessionId, requestId, decision) {
+  const session = sessionManager.getSession(sessionId);
+  if (!session) return;
+  const bridge = bridgeManager.getBridge(session.bridgeId);
+  const claudeWs = claudeWsConnections.get(sessionId);
+
+  if (claudeWs?.readyState === WebSocket.OPEN) {
+    const controlRequest = pendingControlRequests.get(requestId);
+    const response = buildPermissionControlResponse(sessionId, decision, requestId, controlRequest?.event);
+    claudeWs.send(JSON.stringify(response) + '\n');
+    pendingControlRequests.delete(requestId);
+    console.log(`[Plugin] Permission ${decision} for session=${sessionId} requestId=${requestId}`);
+    return;
+  }
+
+  if (bridge?.ws?.readyState === WebSocket.OPEN) {
+    bridge.ws.send(JSON.stringify({ type: 'permission_response', sessionId, requestId, decision, permissions: [] }));
+    console.log(`[Plugin] Permission ${decision} via bridge for session=${sessionId} requestId=${requestId}`);
+  }
+}
+
+async function loadPlugins() {
+  const pluginsDir = join(__dirname, 'plugins');
+  if (!existsSync(pluginsDir)) return;
+  for (const name of readdirSync(pluginsDir)) {
+    const indexPath = join(pluginsDir, name, 'index.js');
+    if (!existsSync(indexPath)) continue;
+    try {
+      const mod = await import(pathToFileURL(indexPath).href);
+      await mod.start(pluginAPI);
+      console.log(`[Plugin] Loaded: ${name}`);
+    } catch (e) {
+      console.error(`[Plugin] Failed to load ${name}: ${e.message}`);
+    }
+  }
+}
+
 // ============ Claude WS Connections (--sdk-url mode) ============
 // When Claude is spawned with --sdk-url ws://server/session/{id},
 // it opens a WebSocket to receive user input and sends events via HTTP POST.
@@ -570,6 +634,9 @@ function forwardToChat(sessionId, event) {
 
   // Persist message record for assistant/user/result events
   appendMessageRecord(sessionId, event);
+
+  // Notify channel plugins
+  pluginAPI._dispatch(sessionId, event);
 }
 
 function getServerSessionMessagesFile(sessionId) {
@@ -1329,4 +1396,5 @@ server.listen(PORT, HOST, () => {
   console.log(`   API:     http://${displayHost}:${PORT}/api/bridges`);
   console.log(`   SDK WS:  ws://${displayHost}:${PORT}/session/xxx (Claude --sdk-url)`);
   console.log(`   SDK POST: http://${displayHost}:${PORT}/session/xxx/events`);
+  loadPlugins().catch(e => console.error(`[Plugin] Load error: ${e.message}`));
 });
