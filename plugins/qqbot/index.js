@@ -522,6 +522,24 @@ export async function start(api) {
 
     registerSessionListener(sessionId);
 
+    // ── /aa — toggle auto-approve for this session ──────────────────────
+    if (userText === '/aa') {
+      if (autoApproveSessions.has(sessionId)) {
+        autoApproveSessions.delete(sessionId);
+        await sendToQQ(replyTarget, '🔒 已关闭自动权限').catch(() => {});
+      } else {
+        autoApproveSessions.add(sessionId);
+        // Also approve any currently pending permission
+        const perm = pendingPermissions.get(sessionId);
+        if (perm) {
+          api.respondToPermission(sessionId, perm.requestId, 'allow');
+          pendingPermissions.delete(sessionId);
+        }
+        await sendToQQ(replyTarget, '🔓 已开启自动权限，后续工具调用无需确认').catch(() => {});
+      }
+      return;
+    }
+
     // ── /allow /deny — permission response ──────────────────────────────
     if (userText === '/allow' || userText === '/deny') {
       const perm = pendingPermissions.get(sessionId);
