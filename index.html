@@ -856,30 +856,67 @@
       const safeDisplay = display.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       const safeSuggestions = JSON.stringify(suggestions || []).replace(/'/g, '&#39;');
 
+      // Generate human-readable description for common tools
+      let toolDescription = '';
+      if (input && typeof input === 'object') {
+        if (toolName === 'Bash' && input.command) {
+          toolDescription = `<div style="margin:6px 0;font-size:13px;color:#657183">执行命令: <code style="background:rgba(27,36,48,0.08);padding:2px 6px;border-radius:4px;font-size:12px">${input.command.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></div>`;
+        } else if (toolName === 'Edit' && input.file_path) {
+          toolDescription = `<div style="margin:6px 0;font-size:13px;color:#657183">编辑文件: <code style="background:rgba(27,36,48,0.08);padding:2px 6px;border-radius:4px;font-size:12px">${input.file_path.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></div>`;
+        } else if (toolName === 'Write' && input.file_path) {
+          toolDescription = `<div style="margin:6px 0;font-size:13px;color:#657183">写入文件: <code style="background:rgba(27,36,48,0.08);padding:2px 6px;border-radius:4px;font-size:12px">${input.file_path.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></div>`;
+        } else if (toolName === 'Read' && input.file_path) {
+          toolDescription = `<div style="margin:6px 0;font-size:13px;color:#657183">读取文件: <code style="background:rgba(27,36,48,0.08);padding:2px 6px;border-radius:4px;font-size:12px">${input.file_path.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></div>`;
+        }
+      }
+
       // Build "remember rule" checkboxes from suggestions
       let rememberHtml = '';
       if (suggestions && suggestions.length > 0) {
         const items = suggestions.map((s, i) => {
-          const rules = (s.rules || []).map(r => r.ruleContent || '').filter(Boolean).join(', ');
-          const dest = s.destination === 'localSettings' ? '永久' : '本次会话';
-          const label = rules || `规则 ${i + 1}`;
-          return `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6d4a21;cursor:pointer;margin-top:4px">
-            <input type="checkbox" class="perm-remember-cb" data-index="${i}" style="accent-color:var(--orange);cursor:pointer">
-            <span>记住此规则（${dest}）：<code style="font-size:11px;background:rgba(27,36,48,0.08);padding:1px 4px;border-radius:4px">${label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></span>
+          // Extract meaningful rule description
+          const rules = (s.rules || []).map(r => r.ruleContent || '').filter(Boolean);
+          const dest = s.destination === 'localSettings' ? '永久记住' : '本次会话';
+
+          // Generate human-readable label
+          let label = '';
+          if (rules.length > 0) {
+            label = rules.join(', ');
+          } else if (s.type === 'addDirectories') {
+            const dirs = s.directories || [];
+            label = `允许访问目录: ${dirs.join(', ')}`;
+          } else if (s.type === 'setMode') {
+            const modeNames = {
+              'acceptEdits': '自动接受编辑',
+              'acceptAll': '自动接受所有操作',
+              'default': '默认权限模式'
+            };
+            label = modeNames[s.mode] || `设置模式: ${s.mode}`;
+          } else {
+            label = `权限规则 ${i + 1}`;
+          }
+
+          return `<label style="display:flex;align-items:start;gap:6px;font-size:12px;color:#6d4a21;cursor:pointer;margin-top:6px;line-height:1.4">
+            <input type="checkbox" class="perm-remember-cb" data-index="${i}" style="accent-color:var(--orange);cursor:pointer;margin-top:2px;flex-shrink:0">
+            <span><strong>${dest}:</strong> <code style="font-size:11px;background:rgba(27,36,48,0.08);padding:2px 5px;border-radius:4px;word-break:break-word">${label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></span>
           </label>`;
         }).join('');
-        rememberHtml = `<div class="perm-remember" style="margin-top:8px">${items}</div>`;
+        rememberHtml = `<div class="perm-remember" style="margin-top:10px;padding:8px;background:rgba(198,122,54,0.08);border-radius:8px;border-left:3px solid var(--orange)">${items}</div>`;
       }
 
       const html = `
         <div class="permission-block" data-request-id="${requestId}" data-suggestions='${safeSuggestions}'>
-          <div class="permission-title">请求权限</div>
-          <div class="permission-tool"><code>${toolName}</code></div>
-          <pre style="margin:8px 0;padding:10px;border-radius:10px;background:rgba(27,36,48,0.06);font-size:12px;max-height:120px;overflow-y:auto;white-space:pre-wrap">${safeDisplay}</pre>
+          <div class="permission-title">🔐 权限请求</div>
+          <div class="permission-tool"><strong>工具:</strong> <code>${toolName}</code></div>
+          ${toolDescription}
+          <details style="margin:8px 0">
+            <summary style="cursor:pointer;color:#657183;font-size:12px;padding:4px 0">查看详细参数</summary>
+            <pre style="margin:8px 0;padding:10px;border-radius:10px;background:rgba(27,36,48,0.06);font-size:11px;max-height:120px;overflow-y:auto;white-space:pre-wrap">${safeDisplay}</pre>
+          </details>
           ${rememberHtml}
-          <div class="permission-actions" style="margin-top:10px">
-            <button class="perm-allow" onclick="respondPermission('${requestId}','allow')">允许</button>
-            <button class="perm-deny" onclick="respondPermission('${requestId}','deny')">拒绝</button>
+          <div class="permission-actions" style="margin-top:12px;display:flex;gap:8px">
+            <button class="perm-allow" onclick="respondPermission('${requestId}','allow')" style="flex:1">✓ 允许</button>
+            <button class="perm-deny" onclick="respondPermission('${requestId}','deny')" style="flex:1">✗ 拒绝</button>
           </div>
         </div>`;
       addMessage('system', html, { html: true });

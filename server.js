@@ -13,19 +13,23 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return {};
   const vars = {};
-  const content = readFileSync(filePath, 'utf8');
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIndex = trimmed.indexOf('=');
-    if (eqIndex === -1) continue;
-    let key = trimmed.slice(0, eqIndex).trim();
-    let value = trimmed.slice(eqIndex + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
+  try {
+    const content = readFileSync(filePath, 'utf8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex === -1) continue;
+      let key = trimmed.slice(0, eqIndex).trim();
+      let value = trimmed.slice(eqIndex + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      vars[key] = value;
     }
-    vars[key] = value;
+  } catch (e) {
+    console.error(`Failed to load env file ${filePath}: ${e.message}`);
   }
   return vars;
 }
@@ -53,7 +57,8 @@ function createTimestampLabel(date = new Date()) {
 }
 
 function safePathSegment(value) {
-  return String(value).replace(/[^a-zA-Z0-9._-]/g, '_');
+  if (!value) return 'unknown';
+  return String(value).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 255);
 }
 
 function formatLogArgs(args) {
@@ -248,13 +253,18 @@ class BridgeManager {
           for (const sessionId of bridge.sessions) {
             const session = sessionManager.getSession(sessionId);
             if (session?.chatWsSet) {
+              const notification = JSON.stringify({
+                type: 'bridge_offline',
+                bridgeId,
+                sessionId,
+              });
               for (const chatWs of session.chatWsSet) {
-                if (chatWs.readyState === WebSocket.OPEN) {
-                  chatWs.send(JSON.stringify({
-                    type: 'bridge_offline',
-                    bridgeId,
-                    sessionId,
-                  }));
+                try {
+                  if (chatWs.readyState === WebSocket.OPEN) {
+                    chatWs.send(notification);
+                  }
+                } catch (e) {
+                  console.error(`[Bridge] Failed to notify chat client: ${e.message}`);
                 }
               }
             }
@@ -548,8 +558,12 @@ function forwardToChat(sessionId, event) {
       tokenStats: session.tokenStats,
     });
     for (const chatWs of session.chatWsSet) {
-      if (chatWs.readyState === WebSocket.OPEN) {
-        chatWs.send(msg);
+      try {
+        if (chatWs.readyState === WebSocket.OPEN) {
+          chatWs.send(msg);
+        }
+      } catch (e) {
+        console.error(`[Session] Failed to send to chat client: ${e.message}`);
       }
     }
   }

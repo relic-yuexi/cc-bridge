@@ -14,21 +14,25 @@ const __dirname = dirname(__filename);
 function loadEnvFile(filePath) {
   if (!existsSync(filePath)) return {};
   const vars = {};
-  const content = readFileSync(filePath, 'utf8');
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    // Skip empty lines and comments
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIndex = trimmed.indexOf('=');
-    if (eqIndex === -1) continue;
-    let key = trimmed.slice(0, eqIndex).trim();
-    let value = trimmed.slice(eqIndex + 1).trim();
-    // Remove surrounding quotes (single or double)
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
+  try {
+    const content = readFileSync(filePath, 'utf8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      // Skip empty lines and comments
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex === -1) continue;
+      let key = trimmed.slice(0, eqIndex).trim();
+      let value = trimmed.slice(eqIndex + 1).trim();
+      // Remove surrounding quotes (single or double)
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      vars[key] = value;
     }
-    vars[key] = value;
+  } catch (e) {
+    console.error(`Failed to load env file ${filePath}: ${e.message}`);
   }
   return vars;
 }
@@ -57,7 +61,8 @@ function createTimestampLabel(date = new Date()) {
 }
 
 function safePathSegment(value) {
-  return String(value).replace(/[^a-zA-Z0-9._-]/g, '_');
+  if (!value) return 'unknown';
+  return String(value).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 255);
 }
 
 function formatLogArgs(args) {
