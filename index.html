@@ -1,0 +1,1547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Bridge Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f4efe7;
+      --panel: rgba(255, 251, 244, 0.76);
+      --panel-strong: rgba(255, 255, 255, 0.88);
+      --line: rgba(31, 40, 54, 0.1);
+      --text: #1b2430;
+      --muted: #657183;
+      --teal: #0f766e;
+      --teal-deep: #0c5c56;
+      --orange: #c67a36;
+      --orange-soft: #f3dec8;
+      --warn: #f6ebbb;
+      --danger: #f5d6dc;
+      --shadow: 0 24px 60px rgba(33, 42, 56, 0.12);
+      --radius-xl: 28px;
+      --radius-lg: 22px;
+      --radius-md: 16px;
+      --transition: 180ms ease;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      overflow: hidden;
+      padding: 20px;
+      color: var(--text);
+      font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at left top, rgba(15, 118, 110, 0.18), transparent 34%),
+        radial-gradient(circle at 90% 12%, rgba(198, 122, 54, 0.18), transparent 28%),
+        linear-gradient(135deg, #f8f3eb, var(--bg) 56%, #eef6f5);
+    }
+
+    button, input { font: inherit; }
+    .app-shell { display: flex; gap: 20px; height: 100%; min-height: 0; }
+    #sidebar, .hero-card, #messages-panel, #input-area {
+      border: 1px solid rgba(255,255,255,0.56);
+      border-radius: var(--radius-xl);
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+    }
+
+    #sidebar {
+      width: 340px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      min-height: 0;
+      padding: 24px;
+      animation: rise .35s ease;
+    }
+
+    .eyebrow, .section-kicker, .composer-label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--teal);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, .stat-card strong, .bridge-spotlight strong { font-family: "Manrope", "Noto Sans SC", sans-serif; letter-spacing: -.03em; }
+    .sidebar-top h1 { font-size: 34px; line-height: 1.05; max-width: 8ch; }
+    .sidebar-copy, .hero-meta, .messages-head-note, .composer-hint, .bridge-info, .session-bridge, .list-empty { color: var(--muted); }
+    .sidebar-copy, .hero-meta, .list-empty, .message-body { line-height: 1.7; }
+
+    .sidebar-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+    .stat-card {
+      padding: 14px 16px;
+      border-radius: var(--radius-md);
+      border: 1px solid rgba(15, 118, 110, 0.12);
+      background: linear-gradient(180deg, rgba(255,255,255,0.86), rgba(214, 242, 234, 0.36));
+    }
+    .stat-card span { display: block; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+    .stat-card strong { font-size: 28px; line-height: 1; }
+
+    .panel-section {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: 18px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.46);
+    }
+    .sessions-section { flex: 1; }
+    .section-heading, .messages-head, .composer-top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .section-heading { margin-bottom: 14px; }
+    .section-kicker { color: var(--orange); }
+    .section-heading h2, .messages-head h3 { font-size: 20px; }
+
+    .ghost-button, #new-session, #send {
+      border: 0;
+      cursor: pointer;
+      transition: transform var(--transition), opacity var(--transition), background var(--transition), box-shadow var(--transition);
+    }
+    .ghost-button {
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(27, 36, 48, 0.06);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .ghost-button:hover, #new-session:hover:not(:disabled), #send:hover:not(:disabled) { transform: translateY(-1px); }
+
+    #bridge-list, #sessions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .bridge-item, .session-item {
+      position: relative;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid rgba(27, 36, 48, 0.08);
+      background: rgba(255,255,255,0.74);
+      transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition), background var(--transition);
+      animation: rise .24s ease;
+    }
+    .bridge-item:hover, .session-item:hover {
+      transform: translateY(-2px);
+      border-color: rgba(15, 118, 110, 0.22);
+      box-shadow: 0 18px 32px rgba(33, 42, 56, 0.08);
+    }
+    .bridge-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; cursor: pointer; }
+    .bridge-item.selected {
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(255,255,255,0.9));
+      border-color: rgba(15, 118, 110, 0.3);
+      box-shadow: 0 18px 34px rgba(15, 118, 110, 0.12);
+    }
+    .bridge-text { flex: 1; min-width: 0; }
+    .bridge-name { margin-bottom: 4px; font-size: 14px; font-weight: 700; }
+    .bridge-status {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .bridge-status.online { background: rgba(15, 118, 110, 0.16); color: var(--teal-deep); }
+    .bridge-status.offline { background: rgba(160, 47, 69, 0.12); color: #9c2941; }
+    .list-empty {
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px dashed rgba(27, 36, 48, 0.16);
+      background: rgba(255,255,255,0.5);
+      font-size: 13px;
+    }
+
+    #new-session {
+      width: 100%;
+      margin-bottom: 14px;
+      padding: 14px 18px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, var(--orange), #dd8a45);
+      color: #fff;
+      font-weight: 700;
+      box-shadow: 0 18px 30px rgba(198, 122, 54, 0.22);
+    }
+    #new-session:disabled, #send:disabled { opacity: .48; cursor: not-allowed; box-shadow: none; transform: none; }
+    .session-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .session-field label { font-size: 12px; color: var(--muted); font-weight: 600; }
+    .session-field input {
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(27, 36, 48, 0.1);
+      outline: none;
+      color: var(--text);
+      background: rgba(255,255,255,0.84);
+      transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+    }
+    .session-field input::placeholder { color: #98a1ac; }
+    .session-field input:focus { border-color: rgba(15, 118, 110, 0.28); box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.08); background: #fff; }
+    .session-field-hint { font-size: 11px; color: var(--muted); }
+    .session-item { padding: 14px 16px; cursor: pointer; }
+    .session-item.active {
+      background: linear-gradient(135deg, rgba(198, 122, 54, 0.18), rgba(255,255,255,0.92));
+      border-color: rgba(198, 122, 54, 0.3);
+      box-shadow: 0 18px 34px rgba(198, 122, 54, 0.14);
+    }
+    .session-title-row { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 5px; align-items: center; font-size: 14px; font-weight: 700; }
+    .session-tag {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(27, 36, 48, 0.06);
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .session-bridge, .bridge-info { font-size: 12px; }
+    .session-workdir { margin-top: 4px; font-size: 11px; color: var(--muted); word-break: break-all; }
+
+    #main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 18px; animation: rise .45s ease; }
+    .hero-card {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      min-height: 156px;
+      padding: 24px 28px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(214, 242, 234, 0.42));
+    }
+    .hero-copy { flex: 1; min-width: 0; }
+    .hero-copy h2 { margin: 10px 0 12px; font-size: clamp(28px, 4vw, 42px); line-height: 1.04; max-width: 16ch; }
+    .hero-side { width: 260px; display: flex; flex-direction: column; gap: 16px; align-items: flex-end; text-align: right; }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 16px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      background: rgba(27, 36, 48, 0.06);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 6px rgba(101, 113, 131, 0.08); }
+    .status-pill[data-tone="success"] { color: var(--teal-deep); background: rgba(15, 118, 110, 0.1); border-color: rgba(15, 118, 110, 0.14); }
+    .status-pill[data-tone="warning"] { color: #a56425; background: rgba(198, 122, 54, 0.12); border-color: rgba(198, 122, 54, 0.14); }
+    .status-pill[data-tone="danger"] { color: #a02f45; background: rgba(160, 47, 69, 0.1); border-color: rgba(160, 47, 69, 0.14); }
+    .bridge-spotlight {
+      width: 100%;
+      padding: 18px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.72);
+    }
+    .spotlight-label { display: block; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+    .bridge-spotlight strong { display: block; margin-bottom: 6px; font-size: 20px; line-height: 1.1; }
+    .bridge-spotlight span:last-child { color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+    #messages-panel {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 22px 16px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.86), rgba(255, 251, 244, 0.72));
+    }
+    .messages-head { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+    .messages-head-note, .composer-hint { font-size: 12px; }
+    #messages { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; scroll-behavior: smooth; }
+    .message-list { display: flex; flex-direction: column; gap: 14px; min-height: 100%; padding-bottom: 6px; }
+    .message {
+      width: fit-content;
+      max-width: min(76ch, 82%);
+      padding: 14px 16px;
+      border-radius: 22px;
+      box-shadow: 0 14px 26px rgba(33, 42, 56, 0.08);
+      animation: rise .2s ease;
+    }
+    .message.user { align-self: flex-end; color: #fff; background: linear-gradient(135deg, var(--teal), #169184); border-bottom-right-radius: 8px; }
+    .message.assistant { background: var(--panel-strong); border: 1px solid rgba(27, 36, 48, 0.08); border-bottom-left-radius: 8px; }
+    .message.system { align-self: center; background: linear-gradient(135deg, var(--warn), #fff9dd); color: #6d4a21; border: 1px solid rgba(165, 100, 37, 0.12); }
+    .message.error { align-self: center; background: linear-gradient(135deg, var(--danger), #fff7f8); color: #7e2237; border: 1px solid rgba(160, 47, 69, 0.12); }
+    .message-meta {
+      margin-bottom: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      opacity: .72;
+    }
+    .message-body { font-size: 14px; word-break: break-word; line-height: 1.7; }
+    .message-body p { margin: 0 0 8px; }
+    .message-body p:last-child { margin-bottom: 0; }
+    .message-body pre { margin: 8px 0; padding: 12px 14px; border-radius: 12px; background: rgba(27,36,48,0.06); overflow-x: auto; font-family: "Cascadia Code","Fira Code",monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+    .message-body code { padding: 2px 6px; border-radius: 6px; background: rgba(27,36,48,0.07); font-family: "Cascadia Code","Fira Code",monospace; font-size: 13px; }
+    .message-body pre code { padding: 0; background: none; }
+    .message-body ul, .message-body ol { margin: 6px 0; padding-left: 20px; }
+    .message-body blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--teal); color: var(--muted); }
+
+    .tool-use-block {
+      margin: 8px 0;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(15, 118, 110, 0.15);
+      background: linear-gradient(135deg, rgba(15,118,110,0.06), rgba(255,255,255,0.8));
+    }
+    .tool-use-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px; font-weight: 700; color: var(--teal-deep);
+      letter-spacing: .04em; text-transform: uppercase;
+    }
+    .tool-use-header::before { content: "⚙"; font-size: 14px; }
+    .tool-use-input { font-size: 12px; color: var(--muted); white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto; }
+
+    .tool-result-block {
+      margin: 8px 0;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(198, 122, 54, 0.15);
+      background: linear-gradient(135deg, rgba(198,122,54,0.06), rgba(255,255,255,0.8));
+    }
+    .tool-result-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px; font-weight: 700; color: var(--orange);
+      letter-spacing: .04em; text-transform: uppercase;
+    }
+    .tool-result-header::before { content: "✓"; font-size: 14px; }
+
+    .permission-block {
+      margin: 10px 0;
+      padding: 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(198, 122, 54, 0.25);
+      background: linear-gradient(135deg, var(--warn), rgba(255,255,255,0.9));
+    }
+    .permission-title {
+      margin-bottom: 8px;
+      font-size: 14px; font-weight: 700; color: #6d4a21;
+    }
+    .permission-tool { margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+    .permission-tool code { padding: 2px 6px; border-radius: 6px; background: rgba(27,36,48,0.08); font-size: 12px; }
+    .permission-actions { display: flex; gap: 10px; }
+    .permission-actions button {
+      padding: 10px 18px;
+      border: 0;
+      border-radius: 14px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform var(--transition), box-shadow var(--transition);
+    }
+    .permission-actions button:hover { transform: translateY(-1px); }
+    .perm-allow { color: #fff; background: linear-gradient(135deg, var(--teal), #169184); box-shadow: 0 8px 20px rgba(15,118,110,0.2); }
+    .perm-deny { color: #7e2237; background: var(--danger); }
+
+    .empty-state {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+      transition: opacity var(--transition), transform var(--transition);
+    }
+    .empty-state[hidden] { opacity: 0; transform: translateY(8px); pointer-events: none; }
+    .empty-state-card {
+      max-width: 420px;
+      padding: 28px;
+      border-radius: 26px;
+      border: 1px dashed rgba(27, 36, 48, 0.14);
+      background: rgba(255,255,255,0.58);
+    }
+    .empty-mark {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 16px;
+      display: grid;
+      place-items: center;
+      border-radius: 18px;
+      color: var(--teal-deep);
+      font-family: "Manrope", "Noto Sans SC", sans-serif;
+      font-size: 22px;
+      font-weight: 800;
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(198, 122, 54, 0.18));
+    }
+    .empty-state h3 { margin-bottom: 10px; font-size: 26px; }
+
+    #input-area { padding: 18px 22px 22px; background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(243, 222, 200, 0.3)); }
+    .composer-top { margin-bottom: 12px; }
+    .composer-row { display: flex; gap: 12px; align-items: center; }
+    #input {
+      flex: 1;
+      min-width: 0;
+      padding: 16px 18px;
+      border: 1px solid rgba(27, 36, 48, 0.1);
+      border-radius: 18px;
+      outline: none;
+      color: var(--text);
+      background: rgba(255,255,255,0.84);
+      transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+    }
+    #input::placeholder { color: #98a1ac; }
+    #input:focus { border-color: rgba(15, 118, 110, 0.28); box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.08); background: #fff; }
+    #input:disabled { cursor: not-allowed; background: rgba(255,255,255,0.46); color: #95a0aa; }
+    #send {
+      min-width: 120px;
+      padding: 16px 24px;
+      border-radius: 18px;
+      color: #fff;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--teal), #169184);
+      box-shadow: 0 18px 30px rgba(15, 118, 110, 0.22);
+    }
+
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background: rgba(27, 36, 48, 0.16); background-clip: padding-box; }
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    @media (max-width: 1180px) {
+      body { overflow: auto; padding: 12px; }
+      .app-shell { flex-direction: column; gap: 12px; }
+      #sidebar { width: 100%; }
+      .hero-card { flex-direction: column; }
+      .hero-side { width: 100%; align-items: flex-start; text-align: left; }
+      .bridge-spotlight { max-width: 360px; }
+    }
+
+    @media (max-width: 760px) {
+      body { padding: 8px; }
+      .app-shell { gap: 8px; }
+      .sidebar-stats, .composer-row { grid-template-columns: 1fr; flex-direction: column; }
+      .section-heading, .messages-head, .composer-top { flex-direction: column; align-items: flex-start; gap: 8px; }
+      #sidebar, .hero-card, #messages-panel, #input-area {
+        padding: 14px;
+        border-radius: var(--radius-md);
+      }
+      .hero-copy h2 { font-size: 1.5rem; line-height: 1.3; }
+      .hero-copy p { font-size: 0.95rem; }
+      .message { width: 100%; max-width: 100%; font-size: 0.95rem; }
+      .message.user, .message.assistant { align-self: stretch; }
+      #send { width: 100%; min-height: 48px; }
+      #input { font-size: 16px; min-height: 48px; padding: 14px 16px; }
+      .attach-btn { width: 48px; height: 48px; }
+      #input-area { position: relative; z-index: 10; }
+      button { min-height: 44px; padding: 0 16px; }
+    }
+
+    /* ---- File Attachment UI ---- */
+    .attach-btn {
+      flex-shrink: 0;
+      width: 44px; height: 44px;
+      border: 1px solid rgba(27,36,48,0.12);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.7);
+      color: var(--muted);
+      font-size: 18px;
+      cursor: pointer;
+      display: grid; place-items: center;
+      transition: background var(--transition), border-color var(--transition);
+    }
+    .attach-btn:hover { background: rgba(255,255,255,0.92); border-color: rgba(15,118,110,0.28); color: var(--teal); }
+    .attach-btn:disabled { opacity: 0.38; cursor: not-allowed; }
+
+    .attachment-tray {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      padding: 6px 0 2px;
+      min-height: 0;
+    }
+    .attachment-tray:empty { display: none; }
+
+    .att-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 10px 5px 9px;
+      border-radius: 10px;
+      background: rgba(15,118,110,0.08);
+      border: 1px solid rgba(15,118,110,0.18);
+      font-size: 12px; color: var(--teal-deep);
+      max-width: 220px;
+    }
+    .att-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .att-mode-toggle {
+      font-size: 11px; font-weight: 600;
+      padding: 2px 6px; border-radius: 6px;
+      border: 1px solid rgba(15,118,110,0.3);
+      background: transparent; color: var(--teal);
+      cursor: pointer; white-space: nowrap;
+      transition: background var(--transition);
+    }
+    .att-mode-toggle:hover { background: rgba(15,118,110,0.1); }
+    .att-mode-toggle.inline { background: var(--teal); color: #fff; border-color: var(--teal); }
+    .att-remove {
+      border: 0; background: transparent; color: #a02f45;
+      cursor: pointer; font-size: 13px; line-height: 1;
+      padding: 0 2px; opacity: 0.7;
+    }
+    .att-remove:hover { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside id="sidebar">
+      <div class="sidebar-top">
+        <span class="eyebrow">Claude Bridge</span>
+        <h1>多桥接对话控制台</h1>
+        <p class="sidebar-copy">在多个 bridge 之间切换，集中管理会话、实时消息和运行状态。</p>
+        <div class="sidebar-stats">
+          <div class="stat-card"><span>在线桥接</span><strong id="online-bridge-count">0</strong></div>
+          <div class="stat-card"><span>本地会话</span><strong id="session-count">0</strong></div>
+        </div>
+        <div class="stat-card" style="margin-top:12px">
+          <span>当前会话 Token</span>
+          <div id="token-stats-detail" style="margin-top:8px"><span style="color:var(--muted);font-size:12px">暂无统计</span></div>
+        </div>
+      </div>
+
+      <section class="panel-section">
+        <div class="section-heading">
+          <div><span class="section-kicker">Bridge Pool</span><h2>桥接实例</h2></div>
+          <button id="refresh-bridges" class="ghost-button" type="button">刷新</button>
+        </div>
+        <div id="bridge-list"></div>
+      </section>
+
+      <section class="panel-section sessions-section">
+        <div class="section-heading">
+          <div><span class="section-kicker">Sessions</span><h2>会话列表</h2></div>
+        </div>
+        <button id="new-session" type="button" disabled>新建会话</button>
+        <div class="session-field">
+          <label for="work-dir">工作目录（可选）</label>
+          <input type="text" id="work-dir" placeholder="例如 F:/projects/demo 或 /home/user/demo">
+          <span class="session-field-hint">路径需在 bridge 所在机器上生效</span>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;margin-bottom:12px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none">
+          <input type="checkbox" id="skip-permissions" style="accent-color:var(--orange);cursor:pointer">
+          <span>跳过权限确认</span>
+          <span style="font-size:10px;color:#a02f45;font-weight:700" title="--dangerously-skip-permissions">⚠️</span>
+        </label>
+        <div id="sessions"></div>
+      </section>
+    </aside>
+
+    <main id="main">
+      <section class="hero-card">
+        <div class="hero-copy">
+          <span class="eyebrow">Realtime Workspace</span>
+          <h2 id="session-title">先选择 bridge，再创建会话</h2>
+          <p id="selected-bridge-meta" class="hero-meta">当前未绑定任何 bridge，消息输入区暂不可用。</p>
+        </div>
+        <div class="hero-side">
+          <div id="status-pill" class="status-pill" data-tone="idle"><span class="status-dot"></span><span id="status">未连接</span></div>
+          <div class="bridge-spotlight">
+            <span class="spotlight-label">当前桥接</span>
+            <strong id="selected-bridge-name">未选择</strong>
+            <span id="selected-bridge-capacity">等待选择可用 bridge</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="messages-panel">
+        <div class="messages-head">
+          <h3>消息流</h3>
+          <div style="display:flex;align-items:center;gap:10px">
+            <button id="export-history" class="ghost-button" type="button" style="display:none;font-size:12px;padding:7px 12px">导出 JSON</button>
+            <span class="messages-head-note">实时展示用户消息、assistant 回复与系统事件</span>
+          </div>
+        </div>
+        <div id="messages">
+          <div id="empty-state" class="empty-state">
+            <div class="empty-state-card">
+              <div class="empty-mark">CB</div>
+              <h3>这里还没有消息</h3>
+              <p>选择在线 bridge 并创建会话后，这里会滚动显示实时对话、结果回执和异常事件。</p>
+            </div>
+          </div>
+          <div id="message-list" class="message-list"></div>
+        </div>
+      </section>
+
+      <section id="input-area">
+        <div class="composer-top">
+          <span class="composer-label">Message Composer</span>
+          <span id="composer-hint" class="composer-hint">连接成功后可直接按 Enter 发送</span>
+        </div>
+        <div id="attachment-tray" class="attachment-tray"></div>
+        <div class="composer-row">
+          <input type="file" id="file-input" multiple style="display:none">
+          <button id="attach-btn" class="attach-btn" type="button" disabled title="附加文件">📎</button>
+          <input type="text" id="input" placeholder="输入消息..." autocomplete="off" disabled>
+          <button id="send" type="button" disabled>发送</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked@17.0.4/lib/marked.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.3.3/dist/purify.min.js"></script>
+  <script>
+    const API_URL = location.origin;
+    const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+    let currentSession = null;
+    let selectedBridge = null;
+    let ws = null;
+    const sessions = new Map();
+    const bridges = new Map();
+    const sessionTokenStats = new Map(); // sessionId -> { inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, totalCostUsd, turnCount }
+    const hasMarked = typeof marked !== "undefined";
+    const hasDomPurify = typeof DOMPurify !== "undefined";
+    let attachments = []; // { id, name, mimeType, data (base64), mode ('ref'|'inline') }
+
+    if (hasMarked) {
+      const renderer = new marked.Renderer();
+      renderer.link = (href, title, text) => {
+        const safeHref = href || "";
+        const safeTitle = title ? ` title="${title}"` : "";
+        return `<a href="${safeHref}"${safeTitle} target="_blank" rel="noopener">${text}</a>`;
+      };
+      marked.setOptions({ gfm: true, breaks: true, renderer });
+    }
+
+    // ============ LocalStorage Persistence ============
+    function saveState() {
+      try {
+        const data = {
+          selectedBridge,
+          currentSession,
+          sessions: Array.from(sessions.entries()),
+        };
+        localStorage.setItem('claude-bridge-state', JSON.stringify(data));
+      } catch (e) { /* ignore */ }
+    }
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem('claude-bridge-state');
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (data.selectedBridge) selectedBridge = data.selectedBridge;
+        if (data.currentSession) currentSession = data.currentSession;
+        if (Array.isArray(data.sessions)) {
+          for (const [id, info] of data.sessions) {
+            sessions.set(id, info);
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    function saveTokenStats() {
+      try {
+        localStorage.setItem('claude-bridge-token-stats', JSON.stringify(Array.from(sessionTokenStats.entries())));
+      } catch (e) { /* ignore */ }
+    }
+
+    function loadTokenStats() {
+      try {
+        const raw = localStorage.getItem('claude-bridge-token-stats');
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (Array.isArray(data)) {
+          for (const [id, stats] of data) {
+            sessionTokenStats.set(id, stats);
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    const bridgeListEl = document.getElementById("bridge-list");
+    const sessionsEl = document.getElementById("sessions");
+    const messagesEl = document.getElementById("messages");
+    const messageListEl = document.getElementById("message-list");
+    const emptyStateEl = document.getElementById("empty-state");
+    const newSessionButton = document.getElementById("new-session");
+    const workDirInputEl = document.getElementById("work-dir");
+    const inputEl = document.getElementById("input");
+    const sendButton = document.getElementById("send");
+    const sessionTitleEl = document.getElementById("session-title");
+    const selectedBridgeMetaEl = document.getElementById("selected-bridge-meta");
+    const selectedBridgeNameEl = document.getElementById("selected-bridge-name");
+    const selectedBridgeCapacityEl = document.getElementById("selected-bridge-capacity");
+    const statusEl = document.getElementById("status");
+    const statusPillEl = document.getElementById("status-pill");
+    const onlineBridgeCountEl = document.getElementById("online-bridge-count");
+    const sessionCountEl = document.getElementById("session-count");
+    const tokenStatsEl = document.getElementById("token-stats-detail");
+
+    if (workDirInputEl) {
+      try {
+        const savedWorkDir = localStorage.getItem('claude-bridge-workdir');
+        if (savedWorkDir) workDirInputEl.value = savedWorkDir;
+      } catch (e) { /* ignore */ }
+    }
+
+    function generateSessionId() { return crypto.randomUUID(); }
+    function formatTime(date = new Date()) {
+      return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    }
+    function updateStatus(text, tone = "idle") {
+      statusEl.textContent = text;
+      statusPillEl.dataset.tone = tone;
+    }
+    function updateEmptyState() { emptyStateEl.hidden = messageListEl.children.length > 0; }
+    function updateOverview() {
+      onlineBridgeCountEl.textContent = Array.from(bridges.values()).filter((bridge) => bridge.status === "online").length;
+      sessionCountEl.textContent = sessions.size;
+    }
+    function updateSelectedBridgePanel() {
+      if (!selectedBridge || !bridges.has(selectedBridge)) {
+        selectedBridgeNameEl.textContent = "未选择";
+        selectedBridgeCapacityEl.textContent = "等待选择可用 bridge";
+        if (!currentSession) selectedBridgeMetaEl.textContent = "当前未绑定任何 bridge，消息输入区暂不可用。";
+        return;
+      }
+      const bridge = bridges.get(selectedBridge);
+      const capacity = `${bridge.currentSessions}/${bridge.maxSessions} 个会话占用`;
+      selectedBridgeNameEl.textContent = bridge.name;
+      selectedBridgeCapacityEl.textContent = bridge.status === "online" ? capacity : `${capacity} · 当前离线`;
+      if (!currentSession) {
+        selectedBridgeMetaEl.textContent = bridge.status === "online"
+          ? "Bridge 已联机，可以立即创建新会话并开始实时对话。"
+          : "Bridge 当前离线，建议刷新状态或切换到其它在线实例。";
+      }
+    }
+    function updateHero() {
+      if (currentSession && sessions.has(currentSession)) {
+        const session = sessions.get(currentSession);
+        const bridge = bridges.get(session.bridgeId);
+        const bridgeName = bridge ? bridge.name : session.bridgeId.slice(0, 8);
+        sessionTitleEl.textContent = `会话 ${currentSession.slice(0, 8)}`;
+        selectedBridgeMetaEl.textContent = `当前通过 ${bridgeName} 建立连接，实时消息和系统事件会显示在下方。`;
+        return;
+      }
+      if (selectedBridge && bridges.has(selectedBridge)) {
+        const bridge = bridges.get(selectedBridge);
+        sessionTitleEl.textContent = bridge.status === "online" ? "已选择 bridge，可直接创建会话" : "Bridge 当前离线";
+        selectedBridgeMetaEl.textContent = bridge.status === "online"
+          ? "点击「新建会话」后会建立 WebSocket 连接，并启用下方输入区。"
+          : "当前 bridge 不可用，刷新后重试或改选其它实例。";
+        return;
+      }
+      sessionTitleEl.textContent = "先选择 bridge，再创建会话";
+      selectedBridgeMetaEl.textContent = "当前未绑定任何 bridge，消息输入区暂不可用。";
+    }
+
+    function updateTokenStatsDisplay() {
+      if (!tokenStatsEl) return;
+      const stats = currentSession ? sessionTokenStats.get(currentSession) : null;
+      if (!stats || stats.turnCount === 0) {
+        tokenStatsEl.innerHTML = '<span style="color:var(--muted);font-size:12px">暂无统计</span>';
+        return;
+      }
+      const totalTokens = (stats.inputTokens || 0) + (stats.outputTokens || 0);
+      const cacheTokens = (stats.cacheReadInputTokens || 0) + (stats.cacheCreationInputTokens || 0);
+      tokenStatsEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px;">
+          <div><span style="color:var(--muted)">输入</span><br><strong>${(stats.inputTokens||0).toLocaleString()}</strong></div>
+          <div><span style="color:var(--muted)">输出</span><br><strong>${(stats.outputTokens||0).toLocaleString()}</strong></div>
+          <div><span style="color:var(--muted)">缓存</span><br><strong>${cacheTokens.toLocaleString()}</strong></div>
+          <div><span style="color:var(--muted)">轮次</span><br><strong>${stats.turnCount}</strong></div>
+        </div>
+        <div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--line);font-size:12px;">
+          <span style="color:var(--muted)">总计</span> <strong>${totalTokens.toLocaleString()}</strong> tokens ·
+          <strong style="color:var(--teal)">$${(stats.totalCostUsd||0).toFixed(4)}</strong>
+        </div>`;
+    }
+
+    function syncControls() {
+      const bridge = selectedBridge ? bridges.get(selectedBridge) : null;
+      newSessionButton.disabled = !(bridge && bridge.status === "online");
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        inputEl.disabled = true;
+        sendButton.disabled = true;
+        const _ab = document.getElementById('attach-btn'); if (_ab) _ab.disabled = true;
+      }
+      updateOverview();
+      updateSelectedBridgePanel();
+      updateHero();
+      updateTokenStatsDisplay();
+      updateExportButton();
+    }
+
+    function updateExportButton() {
+      if (exportHistoryBtn) exportHistoryBtn.style.display = currentSession ? '' : 'none';
+    }
+    // Markdown renderer (marked + DOMPurify; fallback to simple regex if CDN unavailable)
+    function renderMarkdown(text) {
+      if (!text) return '';
+      if (hasMarked && hasDomPurify) {
+        const raw = marked.parse(text);
+        return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } });
+      }
+      let html = text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        // Code blocks
+        .replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => `<pre><code class="language-${lang || 'text'}">${code.trim()}</code></pre>`)
+        // Inline code
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        // Bold
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        // Italic
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        // Links
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+        // Headers
+        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+        .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+        .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+        // Blockquote
+        .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
+        // Unordered list
+        .replace(/^- (.+)$/gm, '<li>$1</li>')
+        // Paragraphs (double newline)
+        .replace(/\n\n/g, '</p><p>')
+        // Single newline
+        .replace(/\n/g, '<br>');
+      // Wrap loose <li> in <ul>
+      html = html.replace(/((?:<li>.*<\/li>\s*)+)/g, '<ul>$1</ul>');
+      return `<p>${html}</p>`.replace(/<p><\/p>/g, '').replace(/<p>(<pre>|<ul>|<h[123]>|<blockquote>)/g, '$1').replace(/(<\/pre>|<\/ul>|<\/h[123]>|<\/blockquote>)<\/p>/g, '$1');
+    }
+
+    function addMessage(role, content, { html = false } = {}) {
+      const labels = { user: "你", assistant: "Assistant", system: "系统", error: "错误" };
+      const messageEl = document.createElement("article");
+      messageEl.className = `message ${role}`;
+      const metaEl = document.createElement("div");
+      metaEl.className = "message-meta";
+      metaEl.textContent = `${labels[role] || role} · ${formatTime()}`;
+      const bodyEl = document.createElement("div");
+      bodyEl.className = "message-body";
+      if (html) {
+        bodyEl.innerHTML = content;
+      } else if (role === 'assistant') {
+        bodyEl.innerHTML = renderMarkdown(content);
+      } else {
+        bodyEl.textContent = content;
+      }
+      messageEl.append(metaEl, bodyEl);
+      messageListEl.appendChild(messageEl);
+      updateEmptyState();
+      messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: "smooth" });
+      return messageEl;
+    }
+
+    function renderToolUse(toolName, input) {
+      const inputStr = typeof input === 'string' ? input : JSON.stringify(input, null, 2);
+      return `<details class="tool-use-block"><summary class="tool-use-header">🔧 ${toolName}</summary><pre class="tool-use-input">${inputStr.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre></details>`;
+    }
+
+    function renderToolResult(toolName) {
+      return `<div class="tool-result-block"><div class="tool-result-header">${toolName} 完成</div></div>`;
+    }
+
+    function addPermissionRequest(requestId, toolName, input, suggestions) {
+      const inputStr = typeof input === 'string' ? input : JSON.stringify(input, null, 2);
+      const display = inputStr.length > 400 ? inputStr.slice(0, 400) + '...' : inputStr;
+      const safeDisplay = display.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const safeSuggestions = JSON.stringify(suggestions || []).replace(/'/g, '&#39;');
+
+      // Build "remember rule" checkboxes from suggestions
+      let rememberHtml = '';
+      if (suggestions && suggestions.length > 0) {
+        const items = suggestions.map((s, i) => {
+          const rules = (s.rules || []).map(r => r.ruleContent || '').filter(Boolean).join(', ');
+          const dest = s.destination === 'localSettings' ? '永久' : '本次会话';
+          const label = rules || `规则 ${i + 1}`;
+          return `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6d4a21;cursor:pointer;margin-top:4px">
+            <input type="checkbox" class="perm-remember-cb" data-index="${i}" style="accent-color:var(--orange);cursor:pointer">
+            <span>记住此规则（${dest}）：<code style="font-size:11px;background:rgba(27,36,48,0.08);padding:1px 4px;border-radius:4px">${label.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></span>
+          </label>`;
+        }).join('');
+        rememberHtml = `<div class="perm-remember" style="margin-top:8px">${items}</div>`;
+      }
+
+      const html = `
+        <div class="permission-block" data-request-id="${requestId}" data-suggestions='${safeSuggestions}'>
+          <div class="permission-title">请求权限</div>
+          <div class="permission-tool"><code>${toolName}</code></div>
+          <pre style="margin:8px 0;padding:10px;border-radius:10px;background:rgba(27,36,48,0.06);font-size:12px;max-height:120px;overflow-y:auto;white-space:pre-wrap">${safeDisplay}</pre>
+          ${rememberHtml}
+          <div class="permission-actions" style="margin-top:10px">
+            <button class="perm-allow" onclick="respondPermission('${requestId}','allow')">允许</button>
+            <button class="perm-deny" onclick="respondPermission('${requestId}','deny')">拒绝</button>
+          </div>
+        </div>`;
+      addMessage('system', html, { html: true });
+    }
+
+    function respondPermission(requestId, decision) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const block = document.querySelector(`.permission-block[data-request-id="${requestId}"]`);
+
+      // Collect checked suggestions
+      let permissions = [];
+      if (block && decision === 'allow') {
+        let suggestions = [];
+        try { suggestions = JSON.parse(block.dataset.suggestions || '[]'); } catch {}
+        const checkboxes = block.querySelectorAll('.perm-remember-cb');
+        checkboxes.forEach((cb) => {
+          if (cb.checked) {
+            const idx = parseInt(cb.dataset.index, 10);
+            if (suggestions[idx]) permissions.push(suggestions[idx]);
+          }
+        });
+      }
+
+      ws.send(JSON.stringify({ type: 'permission_response', requestId, decision, permissions }));
+
+      // Update UI
+      if (block) {
+        const actions = block.querySelector('.permission-actions');
+        const remember = block.querySelector('.perm-remember');
+        if (remember) remember.style.display = 'none';
+        const label = decision === 'allow'
+          ? (permissions.length > 0 ? `已允许并记住规则` : '已允许')
+          : '已拒绝';
+        const color = decision === 'allow' ? 'var(--teal-deep)' : '#7e2237';
+        if (actions) actions.innerHTML = `<span style="font-size:13px;font-weight:700;color:${color}">${label}</span>`;
+      }
+    }
+    async function loadBridges() {
+      try {
+        const response = await fetch(`${API_URL}/api/bridges`);
+        const data = await response.json();
+        bridges.clear();
+        data.bridges.forEach((bridge) => bridges.set(bridge.bridgeId, bridge));
+        if (selectedBridge && !bridges.has(selectedBridge)) {
+          selectedBridge = null;
+          currentSession = null;
+          saveState();
+        }
+        renderBridges();
+      } catch (error) {
+        console.error("Failed to load bridges:", error);
+      }
+    }
+
+    async function loadActiveSessions() {
+      try {
+        const response = await fetch(`${API_URL}/api/sessions`);
+        const data = await response.json();
+        // Merge server sessions with local state
+        const activeIds = new Set();
+        for (const s of data.sessions) {
+          activeIds.add(s.sessionId);
+          if (!sessions.has(s.sessionId)) {
+            sessions.set(s.sessionId, {
+              id: s.sessionId,
+              bridgeId: s.bridgeId,
+              created: s.createdAt,
+              status: s.status,
+              workDir: s.workDir || null,
+            });
+          } else {
+            // Update status
+            const local = sessions.get(s.sessionId);
+            local.status = s.status;
+            if (s.workDir) local.workDir = s.workDir;
+          }
+          // Restore token stats from server
+          if (s.tokenStats) {
+            sessionTokenStats.set(s.sessionId, s.tokenStats);
+          }
+        }
+        // Remove local sessions that server doesn't know about (stale)
+        for (const [id] of sessions) {
+          if (!activeIds.has(id)) {
+            // Keep it but mark as ended
+            const local = sessions.get(id);
+            if (local.status !== 'ended') {
+              local.status = 'ended';
+            }
+          }
+        }
+        saveState();
+        renderSessions();
+      } catch (error) {
+        console.error("Failed to load sessions:", error);
+      }
+    }
+
+    function renderBridges() {
+      bridgeListEl.innerHTML = "";
+      if (bridges.size === 0) {
+        bridgeListEl.innerHTML = '<div class="list-empty">当前没有可用 bridge。确认后端已启动，或稍后点击"刷新"。</div>';
+        syncControls();
+        return;
+      }
+      bridges.forEach((bridge) => {
+        const item = document.createElement("div");
+        item.className = `bridge-item${bridge.bridgeId === selectedBridge ? " selected" : ""}`;
+        const info = document.createElement("div");
+        info.className = "bridge-text";
+        const name = document.createElement("div");
+        name.className = "bridge-name";
+        name.textContent = bridge.name;
+        const details = document.createElement("div");
+        details.className = "bridge-info";
+        details.textContent = `${bridge.currentSessions}/${bridge.maxSessions} sessions · ID: ${bridge.bridgeId.slice(0, 8)}`;
+        const status = document.createElement("span");
+        status.className = `bridge-status ${bridge.status}`;
+        status.textContent = bridge.status;
+        info.append(name, details);
+        item.append(info, status);
+        item.onclick = () => selectBridge(bridge.bridgeId);
+        bridgeListEl.appendChild(item);
+      });
+      syncControls();
+    }
+    function selectBridge(bridgeId) {
+      selectedBridge = bridgeId;
+      saveState();
+      renderBridges();
+      const bridge = bridges.get(bridgeId);
+      if (bridge) addMessage("system", `已选择 bridge：${bridge.name}`);
+    }
+    async function createSession() {
+      if (!selectedBridge) {
+        addMessage("error", "请先选择 bridge");
+        return;
+      }
+      const skipPerms = document.getElementById('skip-permissions')?.checked || false;
+      const workDir = workDirInputEl?.value ? workDirInputEl.value.trim() : '';
+      if (workDirInputEl) {
+        try { localStorage.setItem('claude-bridge-workdir', workDir); } catch (e) { /* ignore */ }
+      }
+      const sessionId = generateSessionId();
+      try {
+        const response = await fetch(`${API_URL}/api/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bridgeId: selectedBridge,
+            sessionId,
+            dangerouslySkipPermissions: skipPerms,
+            workDir: workDir || undefined,
+          })
+        });
+        if (!response.ok) {
+          const error = await response.json();
+          addMessage("error", `创建会话失败：${error.error}`);
+          return;
+        }
+        sessions.set(sessionId, { id: sessionId, bridgeId: selectedBridge, created: Date.now(), status: 'pending', workDir: workDir || null });
+        sessionTokenStats.set(sessionId, {
+          inputTokens: 0, outputTokens: 0,
+          cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+          totalCostUsd: 0, turnCount: 0,
+        });
+        saveState();
+        saveTokenStats();
+        renderSessions();
+        connectSession(sessionId);
+      } catch (error) {
+        console.error("Failed to create session:", error);
+        addMessage("error", "创建会话失败");
+      }
+    }
+    function connectSession(sessionId) {
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+      }
+      const session = sessions.get(sessionId);
+      if (session) selectedBridge = session.bridgeId;
+      currentSession = sessionId;
+      saveState();
+      updateStatus("连接中", "warning");
+      renderBridges();
+      renderSessions();
+      messageListEl.innerHTML = "";
+      updateEmptyState();
+      ws = new WebSocket(`${WS_URL}/chat?sessionId=${sessionId}`);
+      ws.onopen = () => {
+        updateStatus("已连接", "success");
+        inputEl.disabled = false;
+        sendButton.disabled = false;
+        attachBtnEl.disabled = false;
+        inputEl.focus();
+        updateTokenStatsDisplay();
+      };
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === "agent_event") {
+          // Update token stats from server
+          if (data.tokenStats) {
+            sessionTokenStats.set(sessionId, data.tokenStats);
+            saveTokenStats();
+            updateTokenStatsDisplay();
+          }
+          const evt = data.payload;
+          switch (evt.type) {
+            case 'assistant': {
+              if (!evt.message?.content) break;
+              let textParts = [];
+              let toolParts = [];
+              let thinkingParts = [];
+              for (const item of evt.message.content) {
+                if (item.type === 'text' && item.text) {
+                  textParts.push(item.text);
+                } else if (item.type === 'tool_use') {
+                  toolParts.push(renderToolUse(item.name || 'Tool', item.input));
+                } else if (item.type === 'thinking' && item.thinking) {
+                  thinkingParts.push(item.thinking);
+                }
+              }
+              // Render thinking content
+              if (thinkingParts.length > 0) {
+                addMessage('system', `<details><summary>🤔 思考过程</summary><pre>${thinkingParts.join('\n\n')}</pre></details>`, { html: true });
+              }
+              // Render text content
+              if (textParts.length > 0) {
+                addMessage('assistant', textParts.join(''));
+              }
+              // Render tool uses
+              if (toolParts.length > 0) {
+                addMessage('assistant', toolParts.join(''), { html: true });
+              }
+              break;
+            }
+            case 'tool_result': {
+              const name = evt.tool_name || 'Tool';
+              addMessage('system', renderToolResult(name), { html: true });
+              break;
+            }
+            case 'control_request': {
+              const req = evt.request || {};
+              if (req.subtype === 'can_use_tool') {
+                addPermissionRequest(
+                  req.request_id || evt.request_id,
+                  req.tool_name || req.name || 'Unknown Tool',
+                  req.input || req.command || '',
+                  req.permission_suggestions || []
+                );
+              }
+              break;
+            }
+            case 'result': {
+              const usage = evt.usage || {};
+              const cost = (usage.total_cost_usd || usage.total_cost || 0).toFixed(4);
+              const duration = evt.duration_ms ? ` | ${(evt.duration_ms / 1000).toFixed(1)}s` : '';
+              const inTk = usage.input_tokens || 0;
+              const outTk = usage.output_tokens || 0;
+              const cacheTk = (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
+              addMessage('system',
+                `完成 (${evt.subtype || 'end'}) | Cost: $${cost}${duration} | In: ${inTk.toLocaleString()} Out: ${outTk.toLocaleString()} Cache: ${cacheTk.toLocaleString()}`
+              );
+              break;
+            }
+            case 'system': {
+              // System init event, usually ignorable
+              break;
+            }
+            case 'user': {
+              // Replayed user message, skip (we already show our own)
+              break;
+            }
+            default: {
+              console.log('[Event]', evt.type, evt);
+            }
+          }
+        } else if (data.type === "session_end") {
+          const reason = data.reason === 'user_stopped' ? '（用户主动关闭）' : '';
+          addMessage("system", `会话已结束${reason}`);
+          updateStatus("会话已结束", "danger");
+          if (sessions.has(sessionId)) {
+            sessions.get(sessionId).status = 'ended';
+            saveState();
+            renderSessions();
+          }
+        } else if (data.type === "bridge_offline") {
+          addMessage("error", `Bridge 离线：${data.bridgeId}`);
+          updateStatus("Bridge 离线", "danger");
+          loadBridges();
+        } else if (data.type === "bridge_online") {
+          addMessage("system", `Bridge 已恢复在线：${data.bridgeId}`);
+          updateStatus("已连接", "success");
+          loadBridges();
+        } else if (data.type === "error") {
+          addMessage("error", data.message);
+        }
+      };
+      ws.onerror = () => updateStatus("连接错误", "danger");
+      ws.onclose = () => {
+        updateStatus("已断开", "danger");
+        inputEl.disabled = true;
+        sendButton.disabled = true;
+        attachBtnEl.disabled = true;
+      };
+    }
+    // ---- Attachment helpers ----
+    const TEXT_EXTENSIONS = new Set([
+      'txt','md','markdown','js','mjs','cjs','ts','tsx','jsx','py','rb','go',
+      'java','c','cpp','h','hpp','cs','rs','sh','bash','zsh','yaml','yml',
+      'json','toml','ini','cfg','conf','xml','html','htm','css','scss','sql',
+      'log','csv','env','dockerfile'
+    ]);
+    function isTextFile(mimeType, name) {
+      if (mimeType && (mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'application/xml')) return true;
+      const ext = name.split('.').pop().toLowerCase();
+      return TEXT_EXTENSIONS.has(ext);
+    }
+
+    const attachTrayEl = document.getElementById('attachment-tray');
+    const fileInputEl = document.getElementById('file-input');
+    const attachBtnEl = document.getElementById('attach-btn');
+
+    function renderAttachmentTray() {
+      attachTrayEl.innerHTML = '';
+      attachments.forEach((att) => {
+        const chip = document.createElement('div');
+        chip.className = 'att-chip';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'att-chip-name';
+        nameSpan.title = att.name;
+        nameSpan.textContent = att.name;
+        const modeBtn = document.createElement('button');
+        modeBtn.className = 'att-mode-toggle' + (att.mode === 'inline' ? ' inline' : '');
+        modeBtn.textContent = att.mode === 'inline' ? '内嵌' : '引用';
+        modeBtn.title = '切换附加模式';
+        modeBtn.onclick = () => {
+          att.mode = att.mode === 'inline' ? 'ref' : 'inline';
+          renderAttachmentTray();
+        };
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'att-remove';
+        removeBtn.textContent = '✕';
+        removeBtn.title = '移除附件';
+        removeBtn.onclick = () => {
+          attachments = attachments.filter(a => a.id !== att.id);
+          renderAttachmentTray();
+        };
+        chip.append(nameSpan, modeBtn, removeBtn);
+        attachTrayEl.appendChild(chip);
+      });
+    }
+
+    function addFiles(files) {
+      const MAX = 10 * 1024 * 1024;
+      for (const file of files) {
+        if (file.size > MAX) { addMessage('error', `文件 ${file.name} 超过 10MB 限制`); continue; }
+        const id = crypto.randomUUID();
+        const mimeType = file.type || '';
+        const mode = 'ref';
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const dataUrl = e.target.result;
+          const base64 = dataUrl.split(',')[1];
+          const textFlag = isTextFile(mimeType, file.name);
+          const entry = { id, name: file.name, mimeType, data: base64, mode };
+          if (textFlag) {
+            const textReader = new FileReader();
+            textReader.onload = (te) => { entry.textContent = te.target.result; };
+            textReader.readAsText(file);
+          }
+          attachments.push(entry);
+          renderAttachmentTray();
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    async function sendMessage() {
+      const content = inputEl.value.trim();
+      if ((!content && attachments.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+      // Upload reference-mode attachments
+      const processed = [];
+      for (const att of attachments) {
+        if (att.mode === 'ref') {
+          try {
+            const resp = await fetch(`${API_URL}/api/sessions/${currentSession}/upload`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: att.name, mimeType: att.mimeType, data: att.data }),
+            });
+            if (resp.ok) {
+              const { path: filePath, url } = await resp.json();
+              processed.push({ ...att, filePath, url });
+            } else {
+              addMessage('error', `上传 ${att.name} 失败`);
+            }
+          } catch (e) {
+            addMessage('error', `上传 ${att.name} 失败: ${e.message}`);
+          }
+        } else {
+          processed.push(att);
+        }
+      }
+
+      // Build contentArray
+      const contentArray = [];
+
+      // Text block: user text + ref paths
+      let textParts = content ? [content] : [];
+      for (const att of processed) {
+        if (att.mode === 'ref') {
+          textParts.push(`\n[附件: ${att.name}]\n文件路径: ${att.filePath}\nHTTP URL: ${location.origin}${att.url}`);
+        }
+      }
+      if (textParts.length > 0) {
+        contentArray.push({ type: 'text', text: textParts.join('\n') });
+      }
+
+      // Inline attachments
+      for (const att of processed) {
+        if (att.mode !== 'inline') continue;
+        if (att.mimeType && att.mimeType.startsWith('image/')) {
+          contentArray.push({ type: 'image', source: { type: 'base64', media_type: att.mimeType, data: att.data } });
+        } else if (att.textContent !== undefined) {
+          contentArray.push({ type: 'text', text: `\n[内嵌文件: ${att.name}]\n\`\`\`\n${att.textContent}\n\`\`\`` });
+        }
+      }
+
+      // UI display
+      const displayParts = [content, ...attachments.map(a => `📎 ${a.name} (${a.mode === 'inline' ? '内嵌' : '引用'})`)].filter(Boolean);
+      addMessage("user", displayParts.join('\n'));
+
+      const msgPayload = { type: "user_message", content, contentArray: contentArray.length > 0 ? contentArray : undefined };
+      ws.send(JSON.stringify(msgPayload));
+
+      inputEl.value = "";
+      attachments = [];
+      renderAttachmentTray();
+    }
+
+    async function stopSession(sessionId) {
+      try {
+        const response = await fetch(`${API_URL}/api/sessions/${sessionId}/stop`, { method: 'POST' });
+        if (response.ok) {
+          addMessage("system", `会话 ${sessionId.slice(0, 8)} 已关闭`);
+          if (sessions.has(sessionId)) {
+            sessions.get(sessionId).status = 'ended';
+          }
+          if (currentSession === sessionId) {
+            currentSession = null;
+            if (ws) { ws.onclose = null; ws.close(); ws = null; }
+            updateStatus("未连接", "idle");
+            inputEl.disabled = true;
+            sendButton.disabled = true;
+            attachBtnEl.disabled = true;
+          }
+          saveState();
+          renderSessions();
+          syncControls();
+        }
+      } catch (error) {
+        console.error("Failed to stop session:", error);
+        addMessage("error", "关闭会话失败");
+      }
+    }
+
+    async function resumeSession(sessionId) {
+      const local = sessions.get(sessionId);
+      if (!local) return;
+      const bridgeId = local.bridgeId || selectedBridge;
+      if (!bridgeId) {
+        addMessage("error", "无法恢复：未知 bridge");
+        return;
+      }
+      try {
+        const response = await fetch(`${API_URL}/api/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bridgeId, sessionId }),
+        });
+        if (!response.ok) {
+          const err = await response.json();
+          addMessage("error", `恢复失败：${err.error}`);
+          return;
+        }
+        local.status = 'pending';
+        saveState();
+        renderSessions();
+        connectSession(sessionId);
+      } catch (e) {
+        console.error("Failed to resume session:", e);
+        addMessage("error", "恢复会话失败");
+      }
+    }
+
+    function removeEndedSession(sessionId) {
+      sessions.delete(sessionId);
+      sessionTokenStats.delete(sessionId);
+      saveState();
+      saveTokenStats();
+      if (currentSession === sessionId) {
+        currentSession = null;
+        messageListEl.innerHTML = "";
+        updateEmptyState();
+      }
+      renderSessions();
+      syncControls();
+    }
+
+    function renderSessions() {
+      sessionsEl.innerHTML = "";
+      if (sessions.size === 0) {
+        sessionsEl.innerHTML = '<div class="list-empty">还没有本地会话。选中在线 bridge 后，点击上方按钮即可创建。</div>';
+        syncControls();
+        return;
+      }
+      sessions.forEach(({ id, bridgeId, status }) => {
+        const item = document.createElement("div");
+        const isActive = id === currentSession;
+        const isEnded = status === 'ended';
+        item.className = `session-item${isActive ? " active" : ""}${isEnded ? " ended" : ""}`;
+        if (isEnded) item.style.opacity = '0.6';
+
+        const titleRow = document.createElement("div");
+        titleRow.className = "session-title-row";
+        const title = document.createElement("div");
+        title.textContent = `${id.slice(0, 8)}...`;
+        const rightGroup = document.createElement("div");
+        rightGroup.style.cssText = "display:flex;gap:6px;align-items:center";
+        const tag = document.createElement("span");
+        tag.className = "session-tag";
+        tag.textContent = isActive ? "active" : isEnded ? "ended" : "session";
+        if (isEnded) tag.style.cssText = "background:var(--danger);color:#7e2237";
+        rightGroup.appendChild(tag);
+
+        // Stop / remove button
+        if (!isEnded) {
+          const stopBtn = document.createElement("button");
+          stopBtn.textContent = "✕";
+          stopBtn.title = "关闭此会话";
+          stopBtn.style.cssText = "border:0;background:rgba(160,47,69,0.1);color:#a02f45;width:24px;height:24px;border-radius:8px;font-size:12px;cursor:pointer;font-weight:700;line-height:1;display:grid;place-items:center;transition:background 180ms ease";
+          stopBtn.onmouseenter = () => stopBtn.style.background = 'rgba(160,47,69,0.2)';
+          stopBtn.onmouseleave = () => stopBtn.style.background = 'rgba(160,47,69,0.1)';
+          stopBtn.onclick = (e) => { e.stopPropagation(); stopSession(id); };
+          rightGroup.appendChild(stopBtn);
+        } else {
+          const resumeBtn = document.createElement("button");
+          resumeBtn.textContent = "↩";
+          resumeBtn.title = "恢复此会话";
+          resumeBtn.style.cssText = "border:0;background:rgba(15,118,110,0.1);color:var(--teal-deep);width:24px;height:24px;border-radius:8px;font-size:13px;cursor:pointer;line-height:1;display:grid;place-items:center;transition:background 180ms ease";
+          resumeBtn.onmouseenter = () => resumeBtn.style.background = 'rgba(15,118,110,0.2)';
+          resumeBtn.onmouseleave = () => resumeBtn.style.background = 'rgba(15,118,110,0.1)';
+          resumeBtn.onclick = (e) => { e.stopPropagation(); resumeSession(id); };
+          rightGroup.appendChild(resumeBtn);
+          const removeBtn = document.createElement("button");
+          removeBtn.textContent = "🗑";
+          removeBtn.title = "移除此记录";
+          removeBtn.style.cssText = "border:0;background:rgba(27,36,48,0.06);color:var(--muted);width:24px;height:24px;border-radius:8px;font-size:11px;cursor:pointer;line-height:1;display:grid;place-items:center;transition:background 180ms ease";
+          removeBtn.onmouseenter = () => removeBtn.style.background = 'rgba(27,36,48,0.12)';
+          removeBtn.onmouseleave = () => removeBtn.style.background = 'rgba(27,36,48,0.06)';
+          removeBtn.onclick = (e) => { e.stopPropagation(); removeEndedSession(id); };
+          rightGroup.appendChild(removeBtn);
+        }
+
+        const bridge = bridges.get(bridgeId);
+        const bridgeLine = document.createElement("div");
+        bridgeLine.className = "session-bridge";
+        bridgeLine.textContent = bridge ? bridge.name : (bridgeId || '').slice(0, 8);
+
+        // Token summary line
+        const stats = sessionTokenStats.get(id);
+        if (stats && stats.turnCount > 0) {
+          const statsLine = document.createElement("div");
+          statsLine.style.cssText = "font-size:11px;color:var(--teal);margin-top:4px";
+          const totalTokens = (stats.inputTokens || 0) + (stats.outputTokens || 0);
+          statsLine.textContent = `${totalTokens.toLocaleString()} tokens · $${(stats.totalCostUsd || 0).toFixed(4)} · ${stats.turnCount} turns`;
+          bridgeLine.appendChild(statsLine);
+        }
+
+        titleRow.append(title, rightGroup);
+        item.append(titleRow, bridgeLine);
+        if (!isEnded) {
+          item.onclick = () => connectSession(id);
+        }
+        sessionsEl.appendChild(item);
+      });
+      syncControls();
+    }
+
+    const exportHistoryBtn = document.getElementById("export-history");
+
+    async function exportHistory() {
+      if (!currentSession) return;
+      try {
+        const resp = await fetch(`${API_URL}/api/sessions/${currentSession}/messages`);
+        const data = await resp.json();
+        const blob = new Blob([JSON.stringify(data.messages, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `session-${currentSession.slice(0, 8)}-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (e) {
+        console.error("Failed to export history:", e);
+        addMessage("error", "导出失败");
+      }
+    }
+
+    newSessionButton.onclick = createSession;
+    sendButton.onclick = sendMessage;
+    exportHistoryBtn.onclick = exportHistory;
+    document.getElementById("refresh-bridges").onclick = loadBridges;
+    inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        sendMessage();
+      }
+    });
+
+    // Attach button
+    attachBtnEl.onclick = () => fileInputEl.click();
+    fileInputEl.onchange = (e) => {
+      addFiles(e.target.files);
+      fileInputEl.value = '';
+    };
+
+    // Drag-and-drop onto input area
+    const inputAreaEl = document.getElementById('input-area');
+    inputAreaEl.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+    inputAreaEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      addFiles(e.dataTransfer.files);
+    });
+
+    // ============ Initialization ============
+    loadState();
+    loadTokenStats();
+
+    // Support ?sessionId=<id> URL parameter for cross-device session restore
+    const urlParams = new URLSearchParams(location.search);
+    const urlSessionId = urlParams.get('sessionId');
+    if (urlSessionId) currentSession = urlSessionId;
+
+    updateEmptyState();
+    renderSessions();
+    loadBridges().then(() => {
+      loadActiveSessions().then(() => {
+        // Auto-reconnect to current session if it's still active
+        if (currentSession && sessions.has(currentSession)) {
+          const session = sessions.get(currentSession);
+          if (session.status !== 'ended') {
+            connectSession(currentSession);
+          }
+        }
+      });
+    });
+    setInterval(loadBridges, 10000);
+    // Periodically sync active sessions
+    setInterval(loadActiveSessions, 15000);
+  </script>
+</body>
+</html>
