@@ -272,6 +272,9 @@ export async function start(api) {
   // sessionId -> { accText, replyTo, channelUserId, verbose }
   const pendingReplies = new Map();
 
+  // sessionId -> { type, openid?, groupOpenid? } (last known reply target)
+  const lastReplyTarget = new Map();
+
   // sessionId -> { requestId, toolName, input }  (awaiting user /allow or /deny)
   const pendingPermissions = new Map();
 
@@ -318,8 +321,14 @@ export async function start(api) {
     registeredSessions.add(sessionId);
 
     api.onEvent(sessionId, async (claudeEvent) => {
-      const state = pendingReplies.get(sessionId);
+      let state = pendingReplies.get(sessionId);
       const verbose = verboseSessions.has(sessionId);
+
+      // If no pending reply but we have a last known target, initialize state (for cron jobs)
+      if (!state && claudeEvent.type === 'assistant' && lastReplyTarget.has(sessionId)) {
+        state = { accText: '', replyTo: lastReplyTarget.get(sessionId), channelUserId: null };
+        pendingReplies.set(sessionId, state);
+      }
 
       // ── assistant event ──────────────────────────────────────────────────
       if (claudeEvent.type === 'assistant' && claudeEvent.message?.content) {
@@ -422,7 +431,7 @@ export async function start(api) {
 
         if (verbose) {
           // Already sent everything inline; just send a brief summary
-          const cost = claudeEvent.usage?.total_cost_usd?.toFixed(4) || '?';
+          const cost = claudeEvent.total_cost_usd?.toFixed(4) || '?';
           await sendToQQ(replyTo, `✅ 完成 | $${cost}`).catch(() => {});
         } else {
           if (accText.trim()) {
@@ -572,6 +581,7 @@ export async function start(api) {
 
     // ── normal message → Claude ──────────────────────────────────────────
     pendingReplies.set(sessionId, { accText: '', replyTo: replyTarget, channelUserId });
+    lastReplyTarget.set(sessionId, replyTarget);
     api.sendUserMessage(sessionId, userText);
   }
 
