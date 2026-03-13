@@ -182,6 +182,7 @@ class SessionManager {
       chatWsSet: new Set(),
       status: 'pending',
       claudeSessionId: null,
+      model: null,
       createdAt: Date.now(),
       lastActivity: Date.now(),
       tokenStats: {
@@ -601,7 +602,7 @@ const server = createServer((req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const { bridgeId, sessionId, dangerouslySkipPermissions, workDir } = JSON.parse(body);
+        const { bridgeId, sessionId, dangerouslySkipPermissions, workDir, model } = JSON.parse(body);
         const bridge = bridgeManager.getBridge(bridgeId);
 
         if (!bridge) {
@@ -629,6 +630,7 @@ const server = createServer((req, res) => {
             resume: false,
             workDir: workDirValue || undefined,
             dangerouslySkipPermissions: !!dangerouslySkipPermissions,
+            model: model || undefined,
           }));
         }
 
@@ -655,6 +657,7 @@ const server = createServer((req, res) => {
       status: s.status,
       claudeSessionId: s.claudeSessionId,
       workDir: s.workDir || null,
+      model: s.model || null,
       createdAt: s.createdAt,
       lastActivity: s.lastActivity,
       chatConnected: s.chatWsSet ? s.chatWsSet.size > 0 : false,
@@ -961,6 +964,13 @@ wss.on('connection', (ws, req) => {
             // Extract data from control_response
             const responseData = event.response.response || {};
             const session = sessionManager.getSession(sessionId);
+            const model = responseData.models?.[0]?.value || 'default';
+
+            // Update session with model info
+            if (session) {
+              session.model = model;
+              persistSessionSnapshot(session);
+            }
 
             // Send system init message (like stdio mode)
             const systemInit = {
@@ -970,7 +980,7 @@ wss.on('connection', (ws, req) => {
               session_id: sessionId,
               tools: ['Task', 'TaskOutput', 'Bash', 'Glob', 'Grep', 'ExitPlanMode', 'Read', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'TodoWrite', 'WebSearch', 'TaskStop', 'AskUserQuestion', 'Skill', 'EnterPlanMode', 'EnterWorktree', 'ExitWorktree', 'CronCreate', 'CronDelete', 'CronList', 'LSP'],
               mcp_servers: [],
-              model: responseData.models?.[0]?.value || 'default',
+              model,
               permissionMode: 'default',
               slash_commands: (responseData.commands || []).map(c => c.name),
               apiKeySource: responseData.account?.tokenSource || 'none',
@@ -1240,6 +1250,51 @@ function handleChatMessage(sessionId, msg) {
     }
 
     console.log(`[Permission] No delivery path available for session=${sessionId} requestId=${requestId}`);
+    return;
+  }
+
+  if (msg.type === 'set_model') {
+    const model = msg.model;
+    if (!model) {
+      console.error(`[set_model] No model specified for session=${sessionId}`);
+      return;
+    }
+
+    // Update session model
+    if (session) {
+      session.model = model;
+      persistSessionSnapshot(session);
+    }
+
+    // sdk-url mode: send control_request to Claude WS
+    const claudeWs = claudeWsConnections.get(sessionId);
+    if (claudeWs?.readyState === WebSocket.OPEN) {
+      const controlRequest = {
+        type: 'control_request',
+        request_id: `set_model-${Date.now()}`,
+        request: {
+          subtype: 'set_model',
+          model,
+        },
+      };
+      claudeWs.send(JSON.stringify(controlRequest) + '\n');
+      console.log(`[set_model -> Claude WS] session=${sessionId} model=${model}`);
+      return;
+    }
+
+    // stdin mode: forward to bridge
+    if (bridge?.ws?.readyState === WebSocket.OPEN) {
+      bridge.ws.send(JSON.stringify({
+        type: 'set_model',
+        sessionId,
+        model,
+        requestId: `set_model-${Date.now()}`,
+      }));
+      console.log(`[set_model -> Bridge] session=${sessionId} model=${model}`);
+      return;
+    }
+
+    console.log(`[set_model] No delivery path available for session=${sessionId}`);
     return;
   }
 

@@ -109,13 +109,16 @@ async function uploadMedia(appId, clientSecret, target, fileBase64) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(`uploadMedia failed: ${JSON.stringify(data)}`);
+  console.log(`[qqbot] uploadMedia response:`, JSON.stringify(data));
   return data.file_info;
 }
 
 async function sendMediaMessage(appId, clientSecret, target, fileInfo, msgId) {
   const token = await getToken(appId, clientSecret);
+  console.log(`[qqbot] sendMediaMessage fileInfo:`, JSON.stringify(fileInfo));
   const body = { msg_type: 7, media: { file_info: fileInfo } };
   if (msgId) { body.msg_id = msgId; body.msg_seq = nextMsgSeq(msgId); }
+  console.log(`[qqbot] sendMediaMessage body:`, JSON.stringify(body));
 
   const url = target.type === 'c2c'
     ? `${QQ_API_BASE}/v2/users/${target.openid}/messages`
@@ -275,7 +278,7 @@ export async function start(api) {
   // sessionId -> { type, openid?, groupOpenid? } (last known reply target)
   const lastReplyTarget = new Map();
 
-  // sessionId -> { requestId, toolName, input }  (awaiting user /allow or /deny)
+  // sessionId -> Map<requestId, { requestId, toolName, input }>  (awaiting user /allow or /deny)
   const pendingPermissions = new Map();
 
   // Sessions with verbose mode on
@@ -348,12 +351,14 @@ export async function start(api) {
             if (/已为您开启自动权限/.test(block.text) && !autoApproveSessions.has(sessionId)) {
               autoApproveSessions.add(sessionId);
               console.log(`[qqbot] AutoApprove ON (triggered by Claude) for ${sessionId}`);
-              // If there's a permission currently pending, approve it immediately
-              const perm = pendingPermissions.get(sessionId);
-              if (perm) {
-                api.respondToPermission(sessionId, perm.requestId, 'allow');
-                pendingPermissions.delete(sessionId);
-                console.log(`[qqbot] Auto-approved pending permission: ${perm.toolName}`);
+              // Approve ALL currently pending permissions
+              const permsMap = pendingPermissions.get(sessionId);
+              if (permsMap && permsMap.size > 0) {
+                for (const [rid, perm] of permsMap) {
+                  api.respondToPermission(sessionId, perm.requestId, 'allow');
+                  console.log(`[qqbot] Auto-approved pending permission: ${perm.toolName} (${rid})`);
+                }
+                permsMap.clear();
               }
             } else if (/已为您关闭自动权限/.test(block.text) && autoApproveSessions.has(sessionId)) {
               autoApproveSessions.delete(sessionId);
@@ -407,8 +412,11 @@ export async function start(api) {
           return;
         }
 
-        // Ask user via QQ
-        pendingPermissions.set(sessionId, { requestId, toolName, input });
+        // Store pending permission (support multiple concurrent requests)
+        if (!pendingPermissions.has(sessionId)) {
+          pendingPermissions.set(sessionId, new Map());
+        }
+        pendingPermissions.get(sessionId).set(requestId, { requestId, toolName, input });
         const inputPreview = JSON.stringify(input).slice(0, 300);
         const prompt =
           `⚠️ Claude 想要使用工具:\n` +
@@ -425,9 +433,14 @@ export async function start(api) {
 
       // ── turn complete ────────────────────────────────────────────────────
       if (claudeEvent.type === 'result') {
-        if (!state) return;
+        if (!state) {
+          console.log(`[qqbot] Result event but no pending state for ${sessionId}`);
+          return;
+        }
         const { accText, replyTo } = state;
         pendingReplies.delete(sessionId);
+
+        console.log(`[qqbot] Result for ${sessionId}: accText=${accText.length} chars, replyTo=${replyTo.type}:${replyTo.msgId?.slice(0, 20)}`);
 
         if (verbose) {
           // Already sent everything inline; just send a brief summary
@@ -438,6 +451,8 @@ export async function start(api) {
             await sendReplyWithImages(replyTo, accText).catch(e =>
               console.error(`[qqbot] Send reply failed: ${e.message}`)
             );
+          } else {
+            console.log(`[qqbot] Result but accText is empty for ${sessionId}`);
           }
         }
       }
@@ -513,13 +528,48 @@ export async function start(api) {
       return;
     }
 
+    // ── /restart — restart session to reload CLAUDE.md ──────────────────
+    if (/^\/restart$|^重启$/.test(userText)) {
+      const oldSessionId = api._channelSessions?.get(`qqbot:${channelUserId}`);
+      api.stopSession('qqbot', channelUserId);
+      if (oldSessionId) {
+        verboseSessions.delete(oldSessionId);
+        autoApproveSessions.delete(oldSessionId);
+        pendingPermissions.delete(oldSessionId);
+        pendingReplies.delete(oldSessionId);
+        registeredSessions.delete(oldSessionId);
+      }
+      await sendToQQ(replyTarget, '🔄 会话已重启，CLAUDE.md 已重新加载。').catch(() => {});
+      return;
+    }
+
+    // ── /sessions — list all sessions ───────────────────────────────────
+    if (/^\/sessions$|^会话列表$/.test(userText)) {
+      try {
+        const { readdirSync } = await import('fs');
+        const sessions = readdirSync(SESSIONS_DIR).filter(name => {
+          const stat = require('fs').statSync(join(SESSIONS_DIR, name));
+          return stat.isDirectory();
+        });
+        const msg = sessions.length > 0
+          ? `📋 会话列表 (${sessions.length}):\n${sessions.map(s => `• ${s}`).join('\n')}`
+          : '📋 暂无会话记录';
+        await sendToQQ(replyTarget, msg).catch(() => {});
+      } catch (e) {
+        await sendToQQ(replyTarget, `❌ 获取会话列表失败: ${e.message}`).catch(() => {});
+      }
+      return;
+    }
+
     let sessionId;
     try {
       // workDir callback: create an isolated per-session subdirectory so each
       // QQ conversation has its own workspace. CLAUDE.md in the parent
       // (plugins/qqbot/) is picked up automatically via directory traversal.
       const getWorkDir = (sid) => {
-        const dir = join(SESSIONS_DIR, sid);
+        // Use channelUserId as directory name (not random sid) for persistence
+        const dirName = channelUserId.replace(/:/g, '-');
+        const dir = join(SESSIONS_DIR, dirName);
         mkdirSync(dir, { recursive: true });
         return dir;
       };
@@ -531,6 +581,16 @@ export async function start(api) {
 
     registerSessionListener(sessionId);
 
+    // ── Refresh replyTo for pending replies ──────────────────────────────
+    // QQ msg_id expires after ~5 minutes. When the user sends any new message
+    // (including commands like /aa, /allow), refresh the replyTo so eventual
+    // replies use the fresh msg_id instead of the stale original one.
+    const pendingState = pendingReplies.get(sessionId);
+    if (pendingState) {
+      pendingState.replyTo = replyTarget;
+      lastReplyTarget.set(sessionId, replyTarget);
+    }
+
     // ── /aa — toggle auto-approve for this session ──────────────────────
     if (userText === '/aa') {
       if (autoApproveSessions.has(sessionId)) {
@@ -538,11 +598,14 @@ export async function start(api) {
         await sendToQQ(replyTarget, '🔒 已关闭自动权限').catch(() => {});
       } else {
         autoApproveSessions.add(sessionId);
-        // Also approve any currently pending permission
-        const perm = pendingPermissions.get(sessionId);
-        if (perm) {
-          api.respondToPermission(sessionId, perm.requestId, 'allow');
-          pendingPermissions.delete(sessionId);
+        // Approve ALL currently pending permissions
+        const permsMap = pendingPermissions.get(sessionId);
+        if (permsMap && permsMap.size > 0) {
+          for (const [rid, perm] of permsMap) {
+            api.respondToPermission(sessionId, perm.requestId, 'allow');
+            console.log(`[qqbot] Auto-approved pending permission via /aa: ${perm.toolName} (${rid})`);
+          }
+          permsMap.clear();
         }
         await sendToQQ(replyTarget, '🔓 已开启自动权限，后续工具调用无需确认').catch(() => {});
       }
@@ -551,13 +614,17 @@ export async function start(api) {
 
     // ── /allow /deny — permission response ──────────────────────────────
     if (userText === '/allow' || userText === '/deny') {
-      const perm = pendingPermissions.get(sessionId);
-      if (perm) {
+      const permsMap = pendingPermissions.get(sessionId);
+      if (permsMap && permsMap.size > 0) {
         const decision = userText === '/allow' ? 'allow' : 'deny';
-        api.respondToPermission(sessionId, perm.requestId, decision);
-        pendingPermissions.delete(sessionId);
+        // Approve/deny ALL pending permissions
+        for (const [rid, perm] of permsMap) {
+          api.respondToPermission(sessionId, perm.requestId, decision);
+        }
+        const count = permsMap.size;
+        permsMap.clear();
         await sendToQQ(replyTarget,
-          decision === 'allow' ? '✅ 已允许，继续执行...' : '❌ 已拒绝'
+          decision === 'allow' ? `✅ 已允许 ${count} 个请求，继续执行...` : `❌ 已拒绝 ${count} 个请求`
         ).catch(() => {});
       } else {
         await sendToQQ(replyTarget, '当前没有待处理的权限请求').catch(() => {});

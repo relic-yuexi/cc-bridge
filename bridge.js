@@ -202,7 +202,8 @@ class BridgeController {
           msg.claudeSessionId,
           msg.env || {},
           msg.dangerouslySkipPermissions,
-          msg.workDir
+          msg.workDir,
+          msg.model
         );
         break;
 
@@ -273,13 +274,26 @@ class BridgeController {
         this.interruptSession(msg.sessionId);
         break;
 
+      case 'set_model':
+        // Forward set_model control_request to Claude stdin (for stdin mode)
+        this.forwardToSession(msg.sessionId, {
+          type: 'control_request',
+          request_id: msg.requestId || `set_model-${Date.now()}`,
+          request: {
+            subtype: 'set_model',
+            model: msg.model,
+          },
+        });
+        console.log(`[${msg.sessionId}] Forwarded set_model to Claude stdin: ${msg.model}`);
+        break;
+
       case 'stop_session':
         this.stopSession(msg.sessionId);
         break;
     }
   }
 
-  startSession(sessionId, resume = false, claudeSessionId = null, sessionEnv = {}, dangerouslySkipPermissions = false, sessionWorkDir = null) {
+  startSession(sessionId, resume = false, claudeSessionId = null, sessionEnv = {}, dangerouslySkipPermissions = false, sessionWorkDir = null, model = null) {
     if (this.claudeSessions.has(sessionId)) {
       console.log(`⚠️  Session ${sessionId} already exists`);
       return;
@@ -336,6 +350,12 @@ class BridgeController {
     if (skipPerms) {
       args.push('--dangerously-skip-permissions');
       console.log(`⚠️  [${sessionId}] Running with --dangerously-skip-permissions`);
+    }
+
+    // Add model if specified
+    if (model) {
+      args.push('--model', model);
+      console.log(`🤖 [${sessionId}] Using model: ${model}`);
     }
 
     const uploadBaseUrl = SIGNALING_URL.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
@@ -557,7 +577,6 @@ class BridgeController {
         };
         break;
 
-      case 'set_model':
       case 'set_max_thinking_tokens':
         controlResponse = {
           type: 'control_response',
