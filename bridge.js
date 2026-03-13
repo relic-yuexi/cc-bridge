@@ -4,115 +4,15 @@ import WebSocket from 'ws';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { inspect } from 'util';
-import { request as httpRequest } from 'http';
-import { request as httpsRequest } from 'https';
+import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { applyEnvFile, ensureDir, createTimestampLabel, safePathSegment, formatLogArgs, initProcessLogger, makeAppendEventFn } from './shared/utils.js';
+import { uploadFileBase64 } from './shared/http-upload.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// ============ .env File Loader ============
-function loadEnvFile(filePath) {
-  if (!existsSync(filePath)) return {};
-  const vars = {};
-  try {
-    const content = readFileSync(filePath, 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      // Skip empty lines and comments
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIndex = trimmed.indexOf('=');
-      if (eqIndex === -1) continue;
-      let key = trimmed.slice(0, eqIndex).trim();
-      let value = trimmed.slice(eqIndex + 1).trim();
-      // Remove surrounding quotes (single or double)
-      if ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.slice(1, -1);
-      }
-      vars[key] = value;
-    }
-  } catch (e) {
-    console.error(`Failed to load env file ${filePath}: ${e.message}`);
-  }
-  return vars;
-}
-
 // Load .env file from bridge directory (won't override existing process.env)
-const envFilePath = process.env.BRIDGE_ENV_FILE || join(__dirname, '.env');
-const dotEnvVars = loadEnvFile(envFilePath);
-if (Object.keys(dotEnvVars).length > 0) {
-  console.log(`📄 Loaded ${Object.keys(dotEnvVars).length} vars from ${envFilePath}`);
-  // Only set vars that aren't already in process.env (process.env takes precedence)
-  for (const [key, value] of Object.entries(dotEnvVars)) {
-    if (!(key in process.env)) {
-      process.env[key] = value;
-    }
-  }
-}
-
-function ensureDir(dirPath) {
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
-  }
-}
-
-function createTimestampLabel(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-}
-
-function safePathSegment(value) {
-  if (!value) return 'unknown';
-  return String(value).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 255);
-}
-
-function formatLogArgs(args) {
-  return args.map((arg) => (
-    typeof arg === 'string'
-      ? arg
-      : inspect(arg, { depth: 6, breakLength: 120, maxArrayLength: 100 })
-  )).join(' ');
-}
-
-function initProcessLogger(logFile, label) {
-  ensureDir(dirname(logFile));
-
-  const originalConsole = {
-    log: console.log.bind(console),
-    info: console.info.bind(console),
-    warn: console.warn.bind(console),
-    error: console.error.bind(console),
-  };
-
-  function write(level, args) {
-    try {
-      appendFileSync(
-        logFile,
-        `[${new Date().toISOString()}] [${level}] ${formatLogArgs(args)}\n`
-      );
-    } catch (e) {
-      originalConsole.error(`[${label}] Failed to append log file ${logFile}: ${e.message}`);
-    }
-  }
-
-  console.log = (...args) => {
-    write('INFO', args);
-    originalConsole.log(...args);
-  };
-  console.info = (...args) => {
-    write('INFO', args);
-    originalConsole.info(...args);
-  };
-  console.warn = (...args) => {
-    write('WARN', args);
-    originalConsole.warn(...args);
-  };
-  console.error = (...args) => {
-    write('ERROR', args);
-    originalConsole.error(...args);
-  };
-}
+applyEnvFile('BRIDGE_ENV_FILE', join(__dirname, '.env'));
 
 // ============ Configuration ============
 const SIGNALING_URL = process.env.SIGNALING_URL || 'ws://localhost:8080';
@@ -728,19 +628,7 @@ class BridgeController {
     }
   }
 
-  appendSessionEvent(sessionId, eventType, details) {
-    try {
-      const sessionDir = getBridgeSessionDir(sessionId);
-      ensureDir(sessionDir);
-      const suffix = details === undefined ? '' : ` ${formatLogArgs([details])}`;
-      appendFileSync(
-        getBridgeSessionEventFile(sessionId),
-        `[${new Date().toISOString()}] [${eventType}]${suffix}\n`
-      );
-    } catch (e) {
-      console.error(`[${sessionId}] Failed to append session event:`, e.message);
-    }
-  }
+  appendSessionEvent = makeAppendEventFn(getBridgeSessionDir, getBridgeSessionEventFile);
 
   persistSessionState(sessionId, extra = {}) {
     const claudeProc = this.claudeSessions.get(sessionId);
@@ -831,67 +719,31 @@ class BridgeController {
       const base64Content = fileContent.toString('base64');
       const finalFilename = filename || filePath.split(/[/\\]/).pop();
 
-      // Parse SIGNALING_URL to get host and port
-      const url = new URL(SIGNALING_URL);
-      const isHttps = url.protocol === 'https:';
-      const requestFn = isHttps ? httpsRequest : httpRequest;
+      const uploadBaseUrl = SIGNALING_URL.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
+      const targetUrl = `${uploadBaseUrl}/api/sessions/${encodeURIComponent(sessionId)}/upload`;
 
-      const payload = JSON.stringify({
+      uploadFileBase64({
+        url: targetUrl,
         filename: finalFilename,
         content: base64Content,
-      });
-
-      const options = {
-        hostname: url.hostname,
-        port: url.port || (isHttps ? 443 : 80),
-        path: `/api/sessions/${encodeURIComponent(sessionId)}/upload`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
+        onSuccess: (result) => {
+          console.log(`[${sessionId}] \u2705 File uploaded successfully: ${finalFilename}`);
+          this.send({
+            type: 'upload_success',
+            sessionId,
+            filename: finalFilename,
+            url: result.url,
+          });
         },
-      };
-
-      const req = requestFn(options, (res) => {
-        let responseData = '';
-        res.on('data', (chunk) => { responseData += chunk; });
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            console.log(`[${sessionId}] ✅ File uploaded successfully: ${finalFilename}`);
-            try {
-              const result = JSON.parse(responseData);
-              this.send({
-                type: 'upload_success',
-                sessionId,
-                filename: finalFilename,
-                url: result.url,
-              });
-            } catch (e) {
-              console.error(`[${sessionId}] Failed to parse upload response:`, e.message);
-            }
-          } else {
-            console.error(`[${sessionId}] ❌ Upload failed with status ${res.statusCode}: ${responseData}`);
-            this.send({
-              type: 'upload_error',
-              sessionId,
-              error: `Upload failed: ${res.statusCode}`,
-              details: responseData,
-            });
-          }
-        });
+        onError: (errMsg) => {
+          console.error(`[${sessionId}] \u274C Upload failed: ${errMsg}`);
+          this.send({
+            type: 'upload_error',
+            sessionId,
+            error: errMsg,
+          });
+        },
       });
-
-      req.on('error', (err) => {
-        console.error(`[${sessionId}] ❌ Upload request error:`, err.message);
-        this.send({
-          type: 'upload_error',
-          sessionId,
-          error: err.message,
-        });
-      });
-
-      req.write(payload);
-      req.end();
 
       this.appendSessionEvent(sessionId, 'file_upload_initiated', {
         filePath,
@@ -899,7 +751,7 @@ class BridgeController {
         size: fileContent.length,
       });
     } catch (e) {
-      console.error(`[${sessionId}] ❌ Failed to read or upload file:`, e.message);
+      console.error(`[${sessionId}] \u274C Failed to read or upload file:`, e.message);
       this.send({
         type: 'upload_error',
         sessionId,

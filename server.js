@@ -1,113 +1,17 @@
 // server.js - Multi-Bridge Management Server
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync, createReadStream, statSync, readdirSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync, existsSync, createReadStream, statSync, readdirSync } from 'fs';
 import { PluginAPI } from './plugin-api.js';
 import { extname, basename } from 'path';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { inspect } from 'util';
+import { applyEnvFile, ensureDir, createTimestampLabel, safePathSegment, formatLogArgs, initProcessLogger, makeAppendEventFn } from './shared/utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// ============ .env File Loader ============
-function loadEnvFile(filePath) {
-  if (!existsSync(filePath)) return {};
-  const vars = {};
-  try {
-    const content = readFileSync(filePath, 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIndex = trimmed.indexOf('=');
-      if (eqIndex === -1) continue;
-      let key = trimmed.slice(0, eqIndex).trim();
-      let value = trimmed.slice(eqIndex + 1).trim();
-      if ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.slice(1, -1);
-      }
-      vars[key] = value;
-    }
-  } catch (e) {
-    console.error(`Failed to load env file ${filePath}: ${e.message}`);
-  }
-  return vars;
-}
-
 // Load .env file (won't override existing process.env)
-const envFilePath = process.env.SERVER_ENV_FILE || join(__dirname, '.env');
-const dotEnvVars = loadEnvFile(envFilePath);
-if (Object.keys(dotEnvVars).length > 0) {
-  console.log(`📄 Loaded ${Object.keys(dotEnvVars).length} vars from ${envFilePath}`);
-  for (const [key, value] of Object.entries(dotEnvVars)) {
-    if (!(key in process.env)) {
-      process.env[key] = value;
-    }
-  }
-}
-
-function ensureDir(dirPath) {
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
-  }
-}
-
-function createTimestampLabel(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-}
-
-function safePathSegment(value) {
-  if (!value) return 'unknown';
-  return String(value).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 255);
-}
-
-function formatLogArgs(args) {
-  return args.map((arg) => (
-    typeof arg === 'string'
-      ? arg
-      : inspect(arg, { depth: 6, breakLength: 120, maxArrayLength: 100 })
-  )).join(' ');
-}
-
-function initProcessLogger(logFile, label) {
-  ensureDir(dirname(logFile));
-
-  const originalConsole = {
-    log: console.log.bind(console),
-    info: console.info.bind(console),
-    warn: console.warn.bind(console),
-    error: console.error.bind(console),
-  };
-
-  function write(level, args) {
-    try {
-      appendFileSync(
-        logFile,
-        `[${new Date().toISOString()}] [${level}] ${formatLogArgs(args)}\n`
-      );
-    } catch (e) {
-      originalConsole.error(`[${label}] Failed to append log file ${logFile}: ${e.message}`);
-    }
-  }
-
-  console.log = (...args) => {
-    write('INFO', args);
-    originalConsole.log(...args);
-  };
-  console.info = (...args) => {
-    write('INFO', args);
-    originalConsole.info(...args);
-  };
-  console.warn = (...args) => {
-    write('WARN', args);
-    originalConsole.warn(...args);
-  };
-  console.error = (...args) => {
-    write('ERROR', args);
-    originalConsole.error(...args);
-  };
-}
+applyEnvFile('SERVER_ENV_FILE', join(__dirname, '.env'));
 
 const PORT = process.env.PORT || 8080;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -131,19 +35,7 @@ function getServerSessionEventFile(sessionId) {
   return join(getServerSessionDir(sessionId), 'events.log');
 }
 
-function appendServerSessionEvent(sessionId, eventType, details) {
-  try {
-    const sessionDir = getServerSessionDir(sessionId);
-    ensureDir(sessionDir);
-    const suffix = details === undefined ? '' : ` ${formatLogArgs([details])}`;
-    appendFileSync(
-      getServerSessionEventFile(sessionId),
-      `[${new Date().toISOString()}] [${eventType}]${suffix}\n`
-    );
-  } catch (e) {
-    console.error(`[Session] Failed to append event for ${sessionId}:`, e.message);
-  }
-}
+const appendServerSessionEvent = makeAppendEventFn(getServerSessionDir, getServerSessionEventFile);
 
 function persistSessionSnapshot(session, extra = {}) {
   if (!session) return;
